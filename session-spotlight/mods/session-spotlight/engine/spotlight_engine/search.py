@@ -517,7 +517,7 @@ def resume_args(s: dict) -> List[str]:
 
 
 def decorate(s: dict, terms: Sequence[str], searcher: Searcher, msg_hits: Dict[str, Dict[str, Hit]]) -> dict:
-    title = s.get("title") or (s.get("first_prompt") or "")[:80] or s.get("session_id") or "(untitled)"
+    title = s.get("title") or (s.get("first_prompt") or "")[:80] or s.get("session_id") or ""  # "": the mod says "Untitled"
     snippet_segs = None
     snippet_role = None
     snippet_id = None

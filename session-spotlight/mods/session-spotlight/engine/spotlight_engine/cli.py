@@ -10,7 +10,7 @@ import sys
 from typing import Optional
 
 from . import __version__, store
-from .config import config_path, data_dir, load_config, write_default_config
+from .config import config_path, data_dir, load_config, resolve_language, write_default_config
 
 # Each command imports what it needs: `search` runs on every keystroke, so it
 # must not pay for the indexer's or the process inspector's imports.
@@ -60,6 +60,7 @@ def cmd_search(args) -> int:
         conn, args.query or "", agent=args.agent, project=args.project, since=args.since, until=args.until,
         status=args.status, sort=args.sort, limit=args.limit, live=live, include_subagents=cfg.include_subagents,
     )
+    result["language"] = resolve_language(cfg)
     if conn is not None:
         try:
             result["index"] = {

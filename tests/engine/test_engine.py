@@ -20,7 +20,7 @@ sys.path.insert(0, str(ENGINE))
 sys.dont_write_bytecode = True
 
 from spotlight_engine import live, search, store  # noqa: E402
-from spotlight_engine.config import load_config  # noqa: E402
+from spotlight_engine.config import load_config, resolve_language  # noqa: E402
 from spotlight_engine.indexer import Busy, IndexLock, run_index  # noqa: E402
 from spotlight_engine import store as store_mod  # noqa: E402,F401
 from spotlight_engine.redact import redact  # noqa: E402
@@ -578,6 +578,49 @@ class SearchTests(Env):
             self.assertFalse(search.check(conn, "local|claude|gone")["ok"])
         finally:
             conn.close()
+
+
+class LanguageTests(Env):
+    def test_language_comes_from_the_engines_config(self):
+        self.assertEqual(resolve_language(load_config()), "en")  # default
+        self.write_config(language="ko")
+        self.assertEqual(resolve_language(load_config()), "ko")
+        self.write_config(language="KO ")
+        self.assertEqual(resolve_language(load_config()), "ko")
+        self.write_config(language="fr")
+        self.assertEqual(resolve_language(load_config()), "en")
+        self.write_config(language={"toString": None})  # not a string: ignored with a config error
+        cfg = load_config()
+        self.assertEqual(resolve_language(cfg), "en")
+        self.assertTrue(cfg.errors)
+
+    def test_auto_follows_the_system_locale(self):
+        self.write_config(language="auto")
+
+        class Out:
+            def __init__(self, text):
+                self.stdout = text
+
+        import subprocess
+        with mock.patch.object(subprocess, "run", return_value=Out("ko_KR\n")):
+            self.assertEqual(resolve_language(load_config()), "ko")
+        with mock.patch.object(subprocess, "run", return_value=Out("de_DE\n")):
+            self.assertEqual(resolve_language(load_config()), "en")
+        with mock.patch.object(subprocess, "run", side_effect=OSError):
+            self.assertEqual(resolve_language(load_config()), "en")
+
+    def test_search_reports_the_language_and_untitled_is_empty(self):
+        self.claude_session("99999999-0000-0000-0000-000000000001", self.project("x"), [("user", "hello there")])
+        self.index()
+        self.write_config(language="ko")
+        from spotlight_engine import cli
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cli.main(["search", "--query="])
+        self.assertEqual(json.loads(buf.getvalue())["language"], "ko")
+        r = search.decorate({"key": "k", "agent": "claude", "session_id": ""}, [], search.Searcher(None), {})
+        self.assertEqual(r["title"], "")
 
 
 class TextTests(unittest.TestCase):

@@ -134,3 +134,19 @@ def write_default_config() -> Path:
     except OSError:
         pass
     return path
+
+
+def resolve_language(cfg: "Config") -> str:
+    """The UI language the mod should use: "en" or "ko". "auto" follows macOS's AppleLocale."""
+    want = (cfg.language if isinstance(cfg.language, str) else "en").strip().lower()
+    if want in ("en", "ko"):
+        return want
+    if want == "auto":
+        import subprocess
+
+        try:
+            out = subprocess.run(["defaults", "read", "-g", "AppleLocale"], capture_output=True, text=True, timeout=3).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        return "ko" if out.strip().lower().startswith("ko") else "en"
+    return "en"
