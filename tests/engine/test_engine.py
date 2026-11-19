@@ -13,6 +13,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ENGINE = Path(__file__).resolve().parents[2] / "session-spotlight" / "mods" / "session-spotlight" / "engine"
 sys.path.insert(0, str(ENGINE))
@@ -21,6 +22,7 @@ sys.dont_write_bytecode = True
 from spotlight_engine import live, search, store  # noqa: E402
 from spotlight_engine.config import load_config  # noqa: E402
 from spotlight_engine.indexer import Busy, IndexLock, run_index  # noqa: E402
+from spotlight_engine import store as store_mod  # noqa: E402,F401
 from spotlight_engine.redact import redact  # noqa: E402
 from spotlight_engine.textutil import excerpt, highlight, snippet  # noqa: E402
 
@@ -175,6 +177,84 @@ class AdapterTests(Env):
         self.assertEqual(self.titles(), ["New name"])
 
 
+class CopyTests(Env):
+    SID = "01a1f20b-1111-7793-bba3-b10e946bfb82"
+
+    def test_rollout_moved_into_the_archive_stays_searchable(self):
+        cwd = self.project("api")
+        path = self.codex_session(self.SID, cwd, [("user", "아카이브 이동 테스트")])
+        self.index()
+        archive = self.codex / "archived_sessions"
+        archive.mkdir()
+        shutil.move(str(path), str(archive / path.name))
+        self.index()
+        self.assertEqual(self.search("아카이브")["total"], 1)
+        self.index()  # and still there once nothing changes
+        r = self.search("아카이브")["results"][0]
+        self.assertTrue(r["archived"])
+
+    def test_an_older_copy_stands_in_when_the_newer_file_goes(self):
+        cwd = self.project("api")
+        old = self.codex_session(self.SID, cwd, [("user", "복사본 테스트")], at=self.now - 9000)
+        archive = self.codex / "archived_sessions"
+        archive.mkdir()
+        copy = archive / old.name
+        shutil.copy(str(old), str(copy))
+        # The live file gets newer.
+        with old.open("a") as f:
+            f.write(json.dumps({"timestamp": iso(self.now), "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "새 답변"}]}}, ensure_ascii=False) + "\n")
+        self.index()
+        self.assertEqual(self.search("복사본")["total"], 1)
+        self.assertFalse(self.search("복사본")["results"][0]["archived"])
+        old.unlink()
+        self.index()
+        res = self.search("복사본")["results"]
+        self.assertEqual(len(res), 1)
+        self.assertTrue(res[0]["archived"])
+
+
+class OwnershipTests(Env):
+    SID = "01a1f20b-2222-7793-bba3-b10e946bfb82"
+
+    def turn(self, path, text, ts):
+        with path.open("a") as f:
+            f.write(json.dumps({"timestamp": iso(ts), "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}}, ensure_ascii=False) + "\n")
+
+    def test_a_former_owner_that_grows_is_read_whole(self):
+        cwd = self.project("api")
+        a = self.codex_session(self.SID, cwd, [("user", "처음 질문 알파"), ("assistant", "초기 답변 베타")], at=self.now - 9000)
+        self.index()  # a owns it
+        archive = self.codex / "archived_sessions"
+        archive.mkdir()
+        b = archive / a.name
+        shutil.copy(str(a), str(b))
+        self.turn(b, "사본에서 늘어난 답", self.now - 5000)
+        self.index()  # b is newer: b owns it now
+        self.turn(a, "원본에서 늘어난 답", self.now - 100)
+        self.index()  # a is newer again: it must be read from the start, not appended
+        self.assertEqual(self.search("초기 답변 베타")["total"], 1)  # only in a message, not in any title/prompt field
+        self.assertEqual(self.search("원본에서 늘어난")["total"], 1)
+        self.assertEqual(self.search("원본에서 늘어난")["results"][0]["messages"], 3)
+
+    def test_a_copy_stands_in_when_the_owner_gives_the_session_up(self):
+        cwd = self.project("api")
+        a = self.codex_session(self.SID, cwd, [("user", "양도 테스트")], at=self.now - 9000)
+        archive = self.codex / "archived_sessions"
+        archive.mkdir()
+        shutil.copy(str(a), str(archive / a.name))
+        self.turn(a, "원본이 더 새것", self.now - 100)
+        self.index()
+        self.assertFalse(self.search("양도")["results"][0]["archived"])
+        # The owner is rewritten as another session: the archived copy takes the old one over.
+        self.codex_session("01a1f20b-3333-7793-bba3-b10e946bfb82", cwd, [("user", "다른 세션")], at=self.now)
+        other = sorted((self.codex / "sessions").rglob("*3333*"))[0]
+        shutil.move(str(other), str(a))
+        self.index()
+        res = self.search("양도")["results"]
+        self.assertEqual(len(res), 1)
+        self.assertTrue(res[0]["archived"])
+
+
 class RedactionTests(Env):
     def test_redact_patterns(self):
         cases = [
@@ -193,6 +273,15 @@ class RedactionTests(Env):
         self.assertNotIn("hunter2", redact("DB_PASSWORD=hunter2hunter2"))
         self.assertNotIn("topsecretpw", redact("postgres://user:topsecretpw@db.local/x"))
         self.assertEqual(redact("프로필 수정 API를 만들었습니다"), "프로필 수정 API를 만들었습니다")
+        # Quoted keys (JSON) and quoted values with spaces or escaped quotes.
+        self.assertEqual(redact('{"password": "hunter 2 x"}'), '{"password": "[REDACTED]"}')
+        self.assertEqual(redact('"client_secret":"a\\"b"'), '"client_secret":"[REDACTED]"')
+        self.assertEqual(redact("api_key = 'abc'"), "api_key = '[REDACTED]'")
+        self.assertEqual(redact("password is required"), "password is required")
+        long_secret = "p" * 900
+        self.assertNotIn(long_secret, redact('{"password": "' + long_secret + '"}'))
+        self.assertNotIn("cut off", redact('"api_key": "cut off before its quote\nnext line stays'))
+        self.assertIn("next line stays", redact('"api_key": "cut off before its quote\nnext line stays'))
 
     def test_secrets_never_reach_the_index(self):
         cwd = self.project("x")
@@ -205,6 +294,34 @@ class RedactionTests(Env):
         self.assertNotIn("ABCDEFGHIJKLMNOPQRSTUVWXYZ123456", blob)
         self.assertEqual(self.search("ABCDEFGHIJKLMNOP")["total"], 0)
         self.assertEqual(self.search("배포해")["total"], 1)
+
+    def test_parser_state_keeps_no_secret(self):
+        cwd = self.project("x")
+        self.claude_session("46444444-4444-4444-4444-444444444444", cwd, [("user", 'deploy with {"password": "hunter 2 x"} and sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZ123456')])
+        self.write_config(exclude_paths=[self.project("hidden")])
+        self.claude_session("47444444-4444-4444-4444-444444444444", self.project("hidden"), [("user", "excluded prompt with private words")])
+        self.index()
+        conn = sqlite3.connect(str(store.index_path()))
+        states = "\n".join(r[0] for r in conn.execute("SELECT state FROM sources"))
+        excluded = conn.execute("SELECT state FROM sources WHERE path LIKE '%47444444%'").fetchone()[0]
+        conn.close()
+        self.assertNotIn("hunter 2", states)
+        self.assertNotIn("ABCDEFGHIJKLMNOPQRSTUVWXYZ123456", states)
+        self.assertEqual(excluded, "{}")
+        self.assertNotIn("private words", states)
+
+    def test_prompt_preview_is_masked_before_it_is_cut(self):
+        cwd = self.project("x")
+        # The closing quote lands on character 401: cut first, the old way, it would be gone.
+        prompt = "x" * 375 + '{"password": "hunter2abcd"} tail'
+        self.assertEqual(prompt[400], '"')
+        self.claude_session("48444444-4444-4444-4444-444444444444", cwd, [("user", prompt)])
+        self.index()
+        conn = sqlite3.connect(str(store.index_path()))
+        blob = "\n".join(r[0] for r in conn.execute("SELECT state FROM sources"))
+        blob += "\n".join(r[0] + r[1] for r in conn.execute("SELECT first_prompt, last_prompt FROM sessions"))
+        conn.close()
+        self.assertNotIn("hunter2", blob)
 
     def test_index_file_permissions(self):
         self.claude_session("45444444-4444-4444-4444-444444444444", self.project("x"), [("user", "hi there")])
@@ -261,6 +378,31 @@ class IncrementalTests(Env):
         self.index()
         self.assertEqual(self.search("반쯤 쓴 줄")["total"], 1)
 
+    def test_equal_sized_rewrite_is_reread(self):
+        self.index()
+        data = self.path.read_bytes()
+        changed = data.replace("첫 번째 답변".encode(), "다른 내용임!".encode())
+        self.assertEqual(len(changed), len(data))
+        time.sleep(0.01)
+        self.path.write_bytes(changed)
+        os.utime(self.path, None)
+        r = self.index()
+        self.assertEqual(r["reread"], 1)
+        self.assertEqual(self.search("첫 번째 답변")["total"], 0)
+        self.assertEqual(self.search("다른 내용임")["total"], 1)
+
+    def test_bigger_replacement_is_not_treated_as_append(self):
+        self.index()
+        other = "66666666-6666-6666-6666-666666666666"
+        lines = [{"type": "user", "sessionId": other, "cwd": self.cwd, "timestamp": iso(time.time()),
+                  "message": {"role": "user", "content": "완전히 다른 대화 " + "x" * 400}}]
+        self.path.write_text("".join(json.dumps(l, ensure_ascii=False) + "\n" for l in lines))
+        r = self.index()
+        self.assertEqual(r["reread"], 1)
+        self.assertEqual(self.search("첫 번째")["total"], 0)
+        res = self.search()["results"]
+        self.assertEqual([x["session_id"] for x in res], [other])
+
     def test_rewritten_file_is_reread(self):
         self.index()
         self.claude_session(self.sid, self.cwd, [("user", "완전히 새로운 내용")])
@@ -292,6 +434,16 @@ class IncrementalTests(Env):
         r = self.index(full=True)
         self.assertEqual(r["reread"], 1)
         self.assertEqual(self.count(), 2)
+
+    def test_reset_waits_for_a_running_indexer(self):
+        self.index()
+        with IndexLock(store.index_path().with_name("index.lock")):
+            with self.assertRaises(Busy):
+                store.reset()
+        self.assertTrue(store.index_path().exists())
+        store.reset()
+        self.assertFalse(store.index_path().exists())
+        self.assertTrue(store.index_path().with_name("index.lock").exists())
 
     def test_old_schema_is_not_read_and_index_rebuilds_it(self):
         self.index()
@@ -470,6 +622,52 @@ class LiveTests(Env):
         procs = self.table({200: (1, "Thu Nov 19 06:18:43 2026", "2.1.283")})
         out = live.resolve([{"address": "t1", "pid": 200, "fg_pid": 200, "fg_argv": ["claude"], "program": "claude"}], load_config(), procs)
         self.assertIsNone(out["terminals"][0]["session_id"])
+
+    def test_pid_file_without_proc_start_needs_a_matching_started_at(self):
+        sessions = self.claude / "sessions"
+        sessions.mkdir()
+        start = "Thu Nov 19 06:18:43 2026"
+        began = live._lstart_epoch(start)
+        procs = self.table({200: (1, start, "claude")})
+        term = [{"address": "t1", "pid": 200, "fg_pid": 200, "fg_argv": ["claude"], "program": "claude"}]
+        (sessions / "200.json").write_text(json.dumps({"pid": 200, "sessionId": "s-new", "startedAt": (began + 3) * 1000}))
+        self.assertEqual(live.resolve(term, load_config(), procs)["terminals"][0]["session_id"], "s-new")
+        (sessions / "200.json").write_text(json.dumps({"pid": 200, "sessionId": "s-stale", "startedAt": (began - 86400) * 1000}))
+        self.assertIsNone(live.resolve(term, load_config(), procs)["terminals"][0]["session_id"])
+        (sessions / "200.json").write_text(json.dumps({"pid": 200, "sessionId": "s-unknown"}))
+        self.assertIsNone(live.resolve(term, load_config(), procs)["terminals"][0]["session_id"])
+
+    def test_codex_process_with_several_rollouts_open(self):
+        root = self.codex / "sessions" / "2026" / "11" / "19"
+        main_id, sub_id, other_id = ("01a1f20b-aaaa-7000-8000-000000000001", "01a1f20b-bbbb-7000-8000-000000000002", "01a1f20b-cccc-7000-8000-000000000003")
+        def rollout(sid, sub):
+            p = root / f"rollout-2026-11-19T10-00-00-{sid}.jsonl"
+            payload = {"id": sid, "cwd": "/x"}
+            if sub:
+                payload["source"] = {"subagent": {"parent": main_id}}
+            p.write_text(json.dumps({"type": "session_meta", "payload": payload}) + "\n")
+            return str(p)
+        a, b, c = rollout(main_id, False), rollout(sub_id, True), rollout(other_id, False)
+
+        class Out:
+            def __init__(self, text):
+                self.stdout = text
+
+        with mock.patch.object(live.subprocess, "run", return_value=Out(f"p10\nn{a}\nn{b}\n")):
+            self.assertEqual(live.codex_sessions_by_pid([10], self.codex), {10: main_id})
+        with mock.patch.object(live.subprocess, "run", return_value=Out(f"p10\nn{a}\nn{c}\n")):
+            self.assertEqual(live.codex_sessions_by_pid([10], self.codex), {10: None})  # two threads: don't guess
+        with mock.patch.object(live.subprocess, "run", return_value=Out(f"p10\nn{b}\n")):
+            self.assertEqual(live.codex_sessions_by_pid([10], self.codex), {10: None})  # a sub-agent alone isn't it
+        # Known-unknown wins over the launch argv: `codex resume A` that now holds two threads stays unresolved.
+        procs = self.table({10: (1, "x", "codex")})
+        term = [{"address": "t5", "pid": 10, "fg_pid": 10, "fg_argv": ["codex", "resume", main_id], "program": "codex"}]
+        with mock.patch.object(live, "codex_sessions_by_pid", return_value={10: None}):
+            got = live.resolve(term, load_config(), procs)["terminals"][0]
+        self.assertIsNone(got["session_id"])
+        self.assertEqual(got["method"], "codex-ambiguous")
+        with mock.patch.object(live, "codex_sessions_by_pid", return_value={}):
+            self.assertEqual(live.resolve(term, load_config(), procs)["terminals"][0]["session_id"], main_id)
 
     def test_child_process_of_the_shell(self):
         sessions = self.claude / "sessions"
