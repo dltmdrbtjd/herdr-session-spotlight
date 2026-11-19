@@ -43,6 +43,7 @@ Cmd+K opens a centered search dialog over every Claude Code and Codex session on
 
 ## Watch out
 
+- **Tell the person before adding it.** It runs programs on this computer only: `python3` (its engine, inside the mod folder), `ps` and `lsof` (to see which terminal runs which session) and, for `"language": "auto"`, `defaults`. It reads Claude Code's and Codex's history without changing it (`~/.claude/projects`, `~/.claude/sessions`, `~/.codex/sessions`, `~/.codex/archived_sessions`, `~/.codex/session_index.jsonl`). It writes only its index (`~/.local/share/herdr-session-spotlight/`, 0600) and its config folder (`~/.config/herdr-session-spotlight/`), and asks for one `keys.json` binding (`cmd-k`). No network access.
 - `herdr-app check` runs `init()`: the mod returns early under `checking()`.
 - Never write into the mod folder at run time: a saved file there reloads the mod. The engine runs with `-B` (no `__pycache__`), and the index lives under `~/.local/share`.
 - `v_virtual_list` rows can't have handlers: use `on_item_click(key)` on the list. Rows need fixed heights (`items.map(itemHeight)`).
