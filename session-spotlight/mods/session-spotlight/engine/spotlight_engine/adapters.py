@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, Iterator, List, Optional, Tuple
 
+from .redact import redact
 from .textutil import title_from_prompt
 
 MAX_RECORD_BYTES = 2 * 1024 * 1024
@@ -192,9 +193,11 @@ def _touch(state: dict, ts: float) -> None:
 
 
 def _prompt(state: dict, text: str) -> None:
+    # Masked before it is cut: a cut could drop the quote that marks where a secret ends.
+    text = redact(text[:4000])[:400]
     if not state.get("first_prompt"):
-        state["first_prompt"] = text[:400]
-    state["last_prompt"] = text[:400]
+        state["first_prompt"] = text
+    state["last_prompt"] = text
 
 
 class ClaudeAdapter(Adapter):
@@ -221,16 +224,16 @@ class ClaudeAdapter(Adapter):
     def feed(self, state: dict, record: dict, emit: Emit) -> None:
         kind = record.get("type")
         if kind == "custom-title":
-            state["title_custom"] = record.get("customTitle") or state.get("title_custom")
+            state["title_custom"] = redact(record.get("customTitle") or "") or state.get("title_custom")
             return
         if kind == "ai-title":
-            state["title_ai"] = record.get("aiTitle") or state.get("title_ai")
+            state["title_ai"] = redact(record.get("aiTitle") or "") or state.get("title_ai")
             return
         if kind == "agent-name":
-            state["title_agent"] = record.get("agentName") or state.get("title_agent")
+            state["title_agent"] = redact(record.get("agentName") or "") or state.get("title_agent")
             return
         if kind == "summary":
-            state["title_summary"] = record.get("summary") or state.get("title_summary")
+            state["title_summary"] = redact(record.get("summary") or "") or state.get("title_summary")
             return
         if kind not in ("user", "assistant"):
             return

@@ -30,11 +30,28 @@ _TOKEN_PATTERNS = [
 ]
 
 _BEARER = re.compile(r"(?i)\b(bearer|token)(\s+)([A-Za-z0-9._\-+/=]{20,})")
-_ASSIGNMENT = re.compile(
-    r"(?i)\b((?:[A-Z0-9_]*_)?(?:password|passwd|pwd|secret|api[_\-]?key|access[_\-]?key|"
-    r"access[_\-]?token|auth[_\-]?token|refresh[_\-]?token|client[_\-]?secret|private[_\-]?key|"
-    r"session[_\-]?token)[A-Z0-9_]*)(\s*[:=]\s*)([\"']?)([^\s\"',;]{6,})"
+_SECRET_NAME = (
+    r"(?:[A-Z0-9_]*[_\-])?(?:password|passwd|pwd|secret|api[_\-]?key|access[_\-]?key|access[_\-]?token|auth[_\-]?token|"
+    r"refresh[_\-]?token|client[_\-]?secret|private[_\-]?key|session[_\-]?token)[A-Z0-9_]*"
 )
+# key=value, key: value, "key": "value", 'key' = 'value'. A quoted value is masked whole, however
+# long, up to its closing quote or, if that was cut off, the end of the line; a bare one needs 6+
+# characters so prose survives.
+_ASSIGNMENT = re.compile(
+    r"(?i)([\"']?)\b(" + _SECRET_NAME + r")\1(\s*[:=]\s*)"
+    r"(?:\"((?:[^\"\\\n]|\\.)*)(?:\"|(?=\n)|$)|'((?:[^'\\\n]|\\.)*)(?:'|(?=\n)|$)|([^\s\"',;]{6,}))"
+)
+
+
+def _mask_assignment(m: "re.Match") -> str:
+    head = f"{m.group(1)}{m.group(2)}{m.group(1)}{m.group(3)}"
+    if m.group(4) is not None:
+        return f'{head}"{MASK}"'
+    if m.group(5) is not None:
+        return f"{head}'{MASK}'"
+    return f"{head}{MASK}"
+
+
 _URL_CREDENTIALS = re.compile(r"(\b[a-z][a-z0-9+.\-]*://[^\s/:@]+:)([^\s/@]+)(@)")
 
 
@@ -44,6 +61,6 @@ def redact(text: str) -> str:
     for pattern in _TOKEN_PATTERNS:
         text = pattern.sub(MASK, text)
     text = _BEARER.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}", text)
-    text = _ASSIGNMENT.sub(lambda m: f"{m.group(1)}{m.group(2)}{m.group(3)}{MASK}", text)
+    text = _ASSIGNMENT.sub(_mask_assignment, text)
     text = _URL_CREDENTIALS.sub(lambda m: f"{m.group(1)}{MASK}{m.group(3)}", text)
     return text
