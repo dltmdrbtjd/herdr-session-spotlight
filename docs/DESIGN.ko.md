@@ -18,7 +18,7 @@
 | 외부 프로세스 | `exec(cmd, args, {timeout})` (사용자 환경, 셸 없이 인자 배열) | 프로브로 PATH·python3 확인 |
 | Mod 검증 | `herdr-app check <folder>`, `herdr-app status`(errors), `herdr-app shot` | 매 변경마다 실행 |
 | 스크립트로 모달 조작 | `herdr-app do <mod>.<command>` → `nextCommand()` (열려 있는 copy에만, `:value` 불가) | E2E용 `scripts/drive.sh` |
-| 언어 | 설정 파일 `readTextFile`, `auto`는 `exec("defaults", ["read", "-g", "AppleLocale"])` | — |
+| 언어 | 엔진이 설정의 `"language"`를 읽고(`auto`는 `defaults read -g AppleLocale`) 검색 응답마다 `"en"`/`"ko"`로 알려줌 | 설정 파일 출처를 하나로(리뷰 지적 반영) |
 
 **Mod 런타임 제약**: DOM·Node API·`setTimeout` 없음, SQLite 없음, 파일 쓰기는 `~/.config/herdr-app` 아래만(`fs/promises`), `readTextFile`은 1 MiB까지. 그래서 SQLite FTS5 인덱스는 **Mod 폴더에 함께 들어 있는 최소 권한 로컬 인덱서 프로세스(Python 표준 라이브러리)** 로 분리했습니다. 네트워크·추가 패키지·데몬이 없고, Mod가 열릴 때 `exec`로 필요한 명령만 실행합니다.
 

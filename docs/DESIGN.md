@@ -19,7 +19,7 @@ so they are the truth for that version), `herdr-app commands`, and probes run in
 | Programs | `exec(cmd, args, {timeout})` (the user's environment, an argument array, no shell) | probe: PATH, `python3` |
 | Checking a mod | `herdr-app check <folder>`, `herdr-app status` (errors), `herdr-app shot` | after every change |
 | Driving the dialog from scripts | `herdr-app do <mod>.<command>` → `nextCommand()` (only while open; no `:value`) | `scripts/drive.sh` |
-| Language | `readTextFile` of the config, `exec("defaults", ["read", "-g", "AppleLocale"])` for `auto` | — |
+| Language | the engine reads `"language"` from its config (`auto`: `defaults read -g AppleLocale`) and reports `"en"`/`"ko"` with every search | one config file for both; a review finding |
 
 **Mod runtime limits:** no DOM, Node APIs or `setTimeout`; no SQLite; writes only under `~/.config/herdr-app`
 (`fs/promises`); `readTextFile` up to 1 MiB. So the SQLite FTS5 index lives in a **small local engine process
