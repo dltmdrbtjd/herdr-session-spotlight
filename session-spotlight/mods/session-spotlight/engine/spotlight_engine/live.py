@@ -16,6 +16,7 @@ argv, labels), so nothing here talks to herdr-core.
 
 from __future__ import annotations
 
+import calendar
 import json
 import os
 import re
@@ -85,7 +86,20 @@ def _same_start(a: Optional[str], b: Optional[str]) -> bool:
     return " ".join(a.split()) == " ".join(b.split())
 
 
+def _lstart_epoch(lstart: Optional[str]) -> Optional[float]:
+    """`ps -o lstart` read in the C locale and UTC, as seconds since the epoch."""
+    if not lstart:
+        return None
+    try:
+        return float(calendar.timegm(time.strptime(" ".join(lstart.split()), "%a %b %d %H:%M:%S %Y")))
+    except ValueError:
+        return None
+
+
 def claude_session_for(pids: List[int], claude_root: Path, procs: ProcessTable) -> Optional[str]:
+    """A pid file counts only if it provably belongs to the running process: its procStart
+    equals the process's start time, or (older files without procStart) its startedAt falls
+    within minutes after it. A file that can't be checked is not trusted."""
     sessions = claude_root / "sessions"
     for pid in pids:
         path = sessions / f"{pid}.json"
@@ -95,17 +109,39 @@ def claude_session_for(pids: List[int], claude_root: Path, procs: ProcessTable) 
             continue
         if not isinstance(data, dict) or not data.get("sessionId"):
             continue
-        recorded = data.get("procStart")
         actual = procs.started(pid)
-        if recorded and actual and not _same_start(recorded, actual):
-            continue  # a dead process's file; this pid belongs to someone else now
         if actual is None:
             continue  # not running
+        recorded = data.get("procStart")
+        if recorded:
+            if not _same_start(recorded, actual):
+                continue  # a dead process's file; this pid belongs to someone else now
+        else:
+            began = _lstart_epoch(actual)
+            started_ms = data.get("startedAt")
+            if began is None or not isinstance(started_ms, (int, float)):
+                continue
+            if not (began - 2 <= started_ms / 1000.0 <= began + 600):
+                continue
         return str(data["sessionId"])
     return None
 
 
-def codex_sessions_by_pid(pids: List[int], codex_root: Path) -> Dict[int, str]:
+def _rollout_is_subagent(path: str) -> bool:
+    try:
+        with open(path, "rb") as handle:
+            first = json.loads(handle.readline(256 * 1024) or b"{}")
+    except (OSError, ValueError):
+        return False
+    payload = first.get("payload") or {} if isinstance(first, dict) else {}
+    source = payload.get("source")
+    return bool(payload.get("parent_thread_id")) or (isinstance(source, dict) and "subagent" in source)
+
+
+def codex_sessions_by_pid(pids: List[int], codex_root: Path) -> Dict[int, Optional[str]]:
+    """pid -> the session whose rollout that codex process has open. A process can hold
+    several (its own thread and sub-agent threads): sub-agents are set aside, and if more
+    than one thread is still left the pid stays unresolved rather than guessed."""
     if not pids:
         return {}
     try:
@@ -116,7 +152,7 @@ def codex_sessions_by_pid(pids: List[int], codex_root: Path) -> Dict[int, str]:
     except (OSError, subprocess.SubprocessError):
         return {}
     root = str(codex_root)
-    found: Dict[int, str] = {}
+    candidates: Dict[int, Dict[str, str]] = {}
     current = None
     for line in out.splitlines():
         if line.startswith("p"):
@@ -129,7 +165,13 @@ def codex_sessions_by_pid(pids: List[int], codex_root: Path) -> Dict[int, str]:
             if path.startswith(root) and "/rollout-" in path and path.endswith(".jsonl"):
                 m = UUID.search(path.rsplit("/", 1)[-1])
                 if m:
-                    found[current] = m.group(0)
+                    candidates.setdefault(current, {})[m.group(0)] = path
+    found: Dict[int, Optional[str]] = {}
+    for pid, ids in candidates.items():
+        main = [sid for sid, path in ids.items() if not _rollout_is_subagent(path)]
+        # One main thread: that's it. None, or several: known to be unknown (None), so nothing
+        # else, not even the launch argv, may name a session for this process.
+        found[pid] = main[0] if len(main) == 1 else None
     return found
 
 
@@ -200,11 +242,9 @@ def resolve(terminals: List[dict], cfg, procs: Optional[ProcessTable] = None) ->
                 entry.update(session_id=sid, method="claude-pid-file")
         elif agent == "codex":
             codex_wanted[address] = [p for p in tree if "codex" in procs.command(p).lower()] or tree[:1]
-        if not entry["session_id"]:
-            sid = argv_session(t.get("fg_argv") or [])
-            if sid and agent in ("claude", "codex"):
-                entry.update(session_id=sid, method="argv")
         out.append(entry)
+    argv_of = {t.get("address"): t.get("fg_argv") or [] for t in terminals}
+    ambiguous = set()
     if codex_wanted:
         all_pids = sorted({p for ps in codex_wanted.values() for p in ps})
         by_pid = codex_sessions_by_pid(all_pids, cfg.codex_root)
@@ -214,8 +254,18 @@ def resolve(terminals: List[dict], cfg, procs: Optional[ProcessTable] = None) ->
                 continue
             for p in pids:
                 if p in by_pid:
-                    entry.update(session_id=by_pid[p], method="codex-open-rollout")
+                    if by_pid[p] is None:
+                        ambiguous.add(entry["address"])
+                        entry.update(method="codex-ambiguous")
+                    else:
+                        entry.update(session_id=by_pid[p], method="codex-open-rollout")
                     break
+    for entry in out:
+        if entry["session_id"] or entry["address"] in ambiguous or entry["agent"] not in ("claude", "codex"):
+            continue
+        sid = argv_session(argv_of.get(entry["address"]) or [])
+        if sid:
+            entry.update(session_id=sid, method="argv")
     return {"ok": True, "terminals": out, "took_ms": round((time.perf_counter() - started) * 1000, 1)}
 
 
