@@ -302,18 +302,43 @@ export function wrapWords(segments, limit = 400) {
 // Navigation
 
 /**
- * What Enter does for a result. Running sessions are focused by their exact
- * terminal address, never by name; nothing is started for them.
- *   { kind: "focus", address, steps: [[command, args], ...] }
- *   { kind: "resume", ... } | { kind: "blocked", message }
+ * What Enter does, decided on a fresh `resolve` answer (never on the list's cached one):
+ *   { kind: "focus", address, steps } | { kind: "resume" } | { kind: "blocked", message }
+ * A session is focused where a terminal holds it now, by that terminal's exact address.
+ * Nothing is started while any terminal of the same agent couldn't be identified, or when
+ * the holder can't be focused: a duplicate of a running session is worse than a refusal.
  */
-export function planOpen(r, world) {
+export function decideOpen(r, resolved, world, asked = null) {
   if (!r) return { kind: "blocked", message: "선택된 세션이 없습니다" };
-  const address = r.running?.address;
-  if (address) return planFocus(address, world);
-  if (r.kind === "live") return { kind: "blocked", message: "이 터미널은 더 이상 실행 중이 아닙니다" };
+  if (!resolved || resolved.ok === false || !Array.isArray(resolved.terminals)) {
+    return { kind: "blocked", message: `실행 중인 세션을 확인하지 못해 아무것도 열지 않았습니다${resolved?.message ? `: ${resolved.message}` : ""}` };
+  }
+  const list = resolved.terminals;
+  // Every terminal that was asked about must be in the answer; a gap is an unknown.
+  const missing = (asked ?? []).filter((a) => !list.some((t) => t.address === a));
+  if (missing.length) {
+    return { kind: "blocked", message: `터미널(${missing.join(", ")})을 확인하지 못해 아무것도 열지 않았습니다` };
+  }
+  if (r.kind === "live" && !r.session_id) {
+    // An agent Spotlight can't identify (not Claude/Codex): its terminal, if an agent still runs there.
+    const address = r.running?.address;
+    const still = address && liveTerminals(world).some((t) => t.address === address);
+    return still ? planFocus(address, world) : { kind: "blocked", message: "이 터미널의 에이전트는 더 이상 실행 중이 아닙니다" };
+  }
+  const holder = list.find((t) => t.agent === r.agent && t.session_id && t.session_id === r.session_id);
+  if (holder) {
+    const plan = planFocus(holder.address, world);
+    if (plan.kind === "focus") return plan;
+    return { kind: "blocked", message: `이 세션은 ${holder.address}에서 실행 중이지만 그 터미널로 이동할 수 없습니다` };
+  }
+  if (r.kind === "live") return { kind: "blocked", message: "이 터미널은 더 이상 이 세션을 실행하지 않습니다" };
+  const unknown = list.filter((t) => t.agent === r.agent && !t.session_id).map((t) => t.address);
+  if (unknown.length) {
+    const who = AGENT_LABEL[r.agent] ?? r.agent;
+    return { kind: "blocked", message: `세션을 확인하지 못한 ${who} 터미널(${unknown.join(", ")})이 있어, 중복 실행을 막으려고 재개하지 않았습니다` };
+  }
   if (!r.resumable) return { kind: "blocked", message: r.why_not || "이 세션은 재개할 수 없습니다" };
-  return { kind: "resume", agent: r.agent, key: r.key };
+  return { kind: "resume" };
 }
 
 export function planFocus(address, world) {

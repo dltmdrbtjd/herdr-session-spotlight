@@ -92,21 +92,56 @@ test("liveForSearch attaches resolved session ids by address", () => {
   assert.equal(out.terminals[1].agent, "claude");
 });
 
-test("planOpen focuses the exact terminal even when spaces share a name", () => {
-  const plan = L.planOpen({ key: "k", running: { address: "t2" } }, world);
+const ok = (terminals) => ({ ok: true, terminals });
+
+test("decideOpen focuses the exact terminal that holds the session, even when spaces share a name", () => {
+  const r = { key: "k", agent: "claude", session_id: "S2", running: { address: "t1" } }; // list says t1: stale
+  const plan = L.decideOpen(r, ok([{ address: "t1", agent: "claude", session_id: "S1" }, { address: "t2", agent: "claude", session_id: "S2" }]), world);
   assert.equal(plan.kind, "focus");
   assert.deepEqual(plan.steps, [["space.select", { id: "spB" }], ["tab.select", { id: "tbB" }], ["pane.focus", { terminal: "t2" }]]);
-  const other = L.planOpen({ key: "k", running: { address: "t1" } }, world);
+  const other = L.decideOpen({ ...r, session_id: "S1" }, ok([{ address: "t1", agent: "claude", session_id: "S1" }]), world);
   assert.deepEqual(other.steps[0], ["space.select", { id: "spA" }]);
 });
 
-test("planOpen: sub-agent without a pane, gone terminal, resumable and not", () => {
-  assert.deepEqual(L.planOpen({ running: { address: "t9" } }, world).steps, [["agent.focus", { terminal: "t9" }]]);
-  assert.equal(L.planOpen({ running: { address: "t404" } }, world).kind, "blocked");
-  assert.equal(L.planOpen({ kind: "live", running: null }, world).kind, "blocked");
-  assert.equal(L.planOpen({ kind: "session", resumable: false, why_not: "없음" }, world).message, "없음");
-  assert.equal(L.planOpen({ kind: "session", resumable: true, agent: "claude", key: "k" }, world).kind, "resume");
-  assert.equal(L.planOpen(null, world).kind, "blocked");
+test("decideOpen: a session whose terminal now runs another one is not focused there", () => {
+  const r = { key: "k", kind: "session", agent: "claude", session_id: "A", running: { address: "t1" }, resumable: true };
+  assert.equal(L.decideOpen(r, ok([{ address: "t1", agent: "claude", session_id: "B" }]), world).kind, "resume");
+});
+
+test("decideOpen never starts anything on an incomplete or failed answer", () => {
+  const r = { key: "k", kind: "session", agent: "codex", session_id: "X", resumable: true };
+  assert.equal(L.decideOpen(r, { ok: false, message: "lsof timed out" }, world).kind, "blocked");
+  assert.equal(L.decideOpen(r, { ok: true }, world).kind, "blocked");
+  assert.equal(L.decideOpen(r, null, world).kind, "blocked");
+  const unresolved = L.decideOpen(r, ok([{ address: "t9", agent: "codex", session_id: null }]), world);
+  assert.equal(unresolved.kind, "blocked");
+  assert.match(unresolved.message, /t9/);
+  // Another agent's unknown terminal doesn't block a Codex resume.
+  assert.equal(L.decideOpen(r, ok([{ address: "t1", agent: "claude", session_id: null }]), world).kind, "resume");
+});
+
+test("decideOpen refuses when a terminal it asked about is missing from the answer", () => {
+  const r = { key: "k", kind: "session", agent: "claude", session_id: "S", resumable: true };
+  const plan = L.decideOpen(r, ok([{ address: "t1", agent: "claude", session_id: "X" }]), world, ["t1", "t2"]);
+  assert.equal(plan.kind, "blocked");
+  assert.match(plan.message, /t2/);
+  assert.equal(L.decideOpen(r, ok([{ address: "t1", agent: "claude", session_id: "X" }]), world, ["t1"]).kind, "resume");
+});
+
+test("decideOpen: an unidentified agent row is focused only while an agent still runs there", () => {
+  const shellOnly = { ...world, terminals: world.terminals.map((t) => (t.address === "t1" ? { ...t, program: { key: "shell", shell: true }, report: null } : t)), agents: world.agents.filter((a) => a.address !== "t1") };
+  assert.equal(L.decideOpen({ kind: "live", running: { address: "t1" } }, ok([]), shellOnly).kind, "blocked");
+  assert.equal(L.decideOpen({ kind: "live", running: { address: "t1" } }, ok([]), world).kind, "focus");
+});
+
+test("decideOpen: holder that can't be focused, sub-agent, gone terminal, not resumable", () => {
+  const r = { key: "k", kind: "session", agent: "claude", session_id: "S", resumable: true };
+  assert.equal(L.decideOpen(r, ok([{ address: "t404", agent: "claude", session_id: "S" }]), world).kind, "blocked");
+  assert.deepEqual(L.decideOpen({ ...r, agent: "codex" }, ok([{ address: "t9", agent: "codex", session_id: "S" }]), world).steps, [["agent.focus", { terminal: "t9" }]]);
+  assert.equal(L.decideOpen({ kind: "live", running: { address: "t404" } }, ok([]), world).kind, "blocked");
+  assert.equal(L.decideOpen({ kind: "live", running: { address: "t9" } }, ok([]), world).kind, "focus");
+  assert.equal(L.decideOpen({ ...r, resumable: false, why_not: "없음" }, ok([]), world).message, "없음");
+  assert.equal(L.decideOpen(null, ok([]), world).kind, "blocked");
 });
 
 test("resumeSpace prefers where it last ran, then its folder, never another machine", () => {

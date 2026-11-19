@@ -116,13 +116,16 @@ export default class SessionSpotlight extends View {
     if (!first && fp === this.liveFp) return;
     this.liveFp = fp;
     if (first) this.search(cx);
+    const seq = (this.resolveSeq = (this.resolveSeq ?? 0) + 1);
     cx.spawn(async (cx) => {
       try {
         const res = await this.call(["resolve", `--terminals=${JSON.stringify(L.resolveInput(live))}`], 10000);
+        if (seq !== this.resolveSeq) return; // a newer answer is coming: never let an older one win
         const map = {};
         for (const t of res.terminals ?? []) map[t.address] = t;
         cache.resolved = map;
       } catch (e) {
+        if (seq !== this.resolveSeq) return;
         this.error = `실행 중 세션 확인 실패: ${e?.message ?? e}`;
       }
       this.search(cx);
@@ -359,18 +362,36 @@ export default class SessionSpotlight extends View {
     closeOverlay(props().overlay);
   }
 
+  // Enter: where does the session run right now? Asked fresh every time, so a stale list
+  // never focuses the wrong terminal or starts a second copy of a running session.
   open(cx) {
     const r = this.current();
-    const plan = L.planOpen(r, this.world());
-    if (plan.kind === "blocked") {
-      this.flash = { level: "warning", text: plan.message };
-      return cx.notify();
-    }
-    if (plan.kind === "focus") {
-      for (const [name, args] of plan.steps) run(name, args);
-      return this.close();
-    }
-    this.resume(r, cx);
+    if (!r) return;
+    if (this.resuming) return;
+    this.resuming = r.key;
+    this.flash = null;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const live = L.liveTerminals(this.world());
+      const asked = L.resolveInput(live);
+      let resolved;
+      try {
+        resolved = await this.call(["resolve", `--terminals=${JSON.stringify(asked)}`, "--no-remember"], 10000);
+      } catch (e) {
+        resolved = { ok: false, message: `${e?.message ?? e}` };
+      }
+      const plan = L.decideOpen(r, resolved, this.world(), asked.map((t) => t.address));
+      if (plan.kind === "blocked") return this.fail(plan.message, cx);
+      if (plan.kind === "focus") {
+        for (const [name, args] of plan.steps) run(name, args);
+        this.resuming = null;
+        if (!r.running || r.running.address !== plan.address) {
+          notify({ title: "Session Spotlight", body: `이 세션은 ${plan.address}에서 실행 중이라 그 터미널로 이동했습니다.`, level: "info" });
+        }
+        return this.close();
+      }
+      await this.resume(r, cx, L.liveFingerprint(live));
+    });
   }
 
   fail(text, cx) {
@@ -379,61 +400,44 @@ export default class SessionSpotlight extends View {
     cx.notify();
   }
 
-  resume(r, cx) {
-    if (this.resuming) return;
+  // Starts an ended session, after `open` confirmed no terminal runs it.
+  async resume(r, cx, fingerprint) {
+    // A session started a moment ago may not have written its pid file yet: don't start it twice.
     const recent = cache.resumedAt[r.key];
     if (recent && Date.now() - recent < 15000) {
-      this.flash = { level: "warning", text: "방금 이 세션의 재개를 시작했습니다. 잠시 후 다시 시도하세요." };
-      return cx.notify();
+      return this.fail("방금 이 세션의 재개를 시작했습니다. 잠시 후 다시 시도하세요.", cx);
     }
-    this.resuming = r.key;
-    this.flash = null;
-    cx.notify();
-    cx.spawn(async (cx) => {
-      let check;
-      try {
-        check = await this.call(["check", `--key=${r.key}`], 10000);
-      } catch (e) {
-        return this.fail(`세션 확인 실패: ${e?.message ?? e}`, cx);
-      }
-      if (!check.ok) {
-        this.runIndex(cx); // the history file is gone: let the index catch up
-        return this.fail(check.message || "세션을 찾을 수 없습니다", cx);
-      }
-      if (!check.resumable) {
-        if (!check.source_exists) this.runIndex(cx); // gone from disk: drop it from the list too
-        return this.fail(check.why_not || "이 세션은 재개할 수 없습니다", cx);
-      }
-      // The list can be a moment old: if a terminal runs the session now, go there instead.
-      try {
-        const live = L.liveTerminals(this.world());
-        const res = await this.call(["resolve", `--terminals=${JSON.stringify(L.resolveInput(live))}`, "--no-remember"], 10000);
-        const holder = (res.terminals ?? []).find((t) => t.agent === r.agent && t.session_id === r.session_id);
-        if (holder) {
-          const plan = L.planFocus(holder.address, this.world());
-          if (plan.kind === "focus") {
-            for (const [name, args] of plan.steps) run(name, args);
-            this.close();
-            notify({ title: "Session Spotlight", body: "이미 실행 중인 세션이라 그 터미널로 이동했습니다.", level: "info" });
-            return;
-          }
-        }
-      } catch (e) {
-        return this.fail(`실행 중 세션 확인 실패, 중복 실행을 막기 위해 재개하지 않았습니다: ${e?.message ?? e}`, cx);
-      }
-      let known = [];
-      try {
-        known = await knownAgents();
-      } catch {}
-      const argv = L.resumeArgv({ ...r, resume_args: check.resume_args }, known);
-      const space = L.resumeSpace(r, this.world());
-      const name = L.tabName(r);
-      cache.resumedAt[r.key] = Date.now();
-      if (space) run("tab.new", { space, folder: check.cwd, argv, ...(name ? { name } : {}) });
-      else run("space.new", { folder: check.cwd, argv, ...(name ? { tab: name } : {}) });
-      this.close();
-      notify({ title: "세션 재개", body: `${r.title}\n${argv.join(" ")}`, level: "success", timeout: 5000 });
-    });
+    let check;
+    try {
+      check = await this.call(["check", `--key=${r.key}`], 10000);
+    } catch (e) {
+      return this.fail(`세션 확인 실패: ${e?.message ?? e}`, cx);
+    }
+    if (!check.ok) {
+      this.runIndex(cx); // the history file is gone: let the index catch up
+      return this.fail(check.message || "세션을 찾을 수 없습니다", cx);
+    }
+    if (!check.resumable) {
+      if (!check.source_exists) this.runIndex(cx); // gone from disk: drop it from the list too
+      return this.fail(check.why_not || "이 세션은 재개할 수 없습니다", cx);
+    }
+    let known = [];
+    try {
+      known = await knownAgents();
+    } catch {}
+    const argv = L.resumeArgv({ ...r, resume_args: check.resume_args }, known);
+    // Terminals that appeared or changed while this was checking weren't part of the answer.
+    if (L.liveFingerprint(L.liveTerminals(this.world())) !== fingerprint) {
+      return this.fail("확인하는 동안 실행 중인 터미널이 바뀌어 재개를 멈췄습니다. 다시 Enter를 누르세요.", cx);
+    }
+    const space = L.resumeSpace(r, this.world());
+    const name = L.tabName(r);
+    cache.resumedAt[r.key] = Date.now();
+    if (space) run("tab.new", { space, folder: check.cwd, argv, ...(name ? { name } : {}) });
+    else run("space.new", { folder: check.cwd, argv, ...(name ? { tab: name } : {}) });
+    this.resuming = null;
+    this.close();
+    notify({ title: "세션 재개", body: `${r.title}\n${argv.join(" ")}`, level: "success", timeout: 5000 });
   }
 
   // -- drawing ----------------------------------------------------------------
