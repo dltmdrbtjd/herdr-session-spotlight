@@ -161,7 +161,7 @@ session-spotlight/mods/session-spotlight/
 ## 개발
 
 ```sh
-python3 -B -m unittest discover -s tests/engine -v      # 엔진 (39)
+python3 -B -m unittest discover -s tests/engine -v      # 엔진 (40)
 node --test tests/mod/*.test.mjs                          # Mod 순수 로직 (17)
 scripts/dev-sync.sh && herdr-app check ~/.config/herdr-app/mods/session-spotlight
 python3 -B scripts/bench.py --sessions 1000 --messages 40 # 합성 벤치마크
