@@ -20,6 +20,8 @@ while [ $# -gt 0 ]; do
 done
 command -v python3 >/dev/null || { echo "python3 is required (3.9+)" >&2; exit 1; }
 [ -d "$APP" ] || { echo "Herdr app home not found: $APP" >&2; exit 1; }
+# Refuse before copying anything if the shortcut is taken.
+if [ "$ADD_KEY" = 1 ]; then python3 "$HERE/scripts/keys.py" check --key "$KEY"; fi
 if [ -e "$DEST" ] && [ ! -f "$DEST/engine/spotlight_engine/__init__.py" ]; then
   echo "$DEST exists and isn't Session Spotlight; not touching it." >&2
   exit 1

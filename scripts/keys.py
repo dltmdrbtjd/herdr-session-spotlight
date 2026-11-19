@@ -2,6 +2,7 @@
 """Adds or removes Session Spotlight's shortcut in Herdr's keys.json, nothing else.
 
     keys.py add [--key cmd-shift-k]     refuses if the key already does something else
+    keys.py check [--key cmd-shift-k]   the same test, changing nothing
     keys.py remove                      removes only bindings that open session-spotlight
 
 The file is backed up next to itself first (keys.json.spotlight-backup-<time>).
@@ -40,7 +41,7 @@ def save(p, data):
 
 
 def main(argv):
-    if not argv or argv[0] not in ("add", "remove"):
+    if not argv or argv[0] not in ("add", "check", "remove"):
         print(__doc__)
         return 2
     key = "cmd-shift-k"
@@ -48,11 +49,13 @@ def main(argv):
         key = argv[argv.index("--key") + 1]
     p = path()
     data = load(p)
-    if argv[0] == "add":
+    if argv[0] in ("add", "check"):
         for section, binds in data.items():
             if isinstance(binds, dict) and key in binds and binds[key] != ACTION and section in ("global", "terminal"):
                 print(f"{key} is already bound in [{section}] to {binds[key]!r}; not changing it. Pick another with --key.")
                 return 1
+        if argv[0] == "check":
+            return 0
         if data.get("global", {}).get(key) == ACTION:
             print(f"{key} already opens Session Spotlight")
             return 0
