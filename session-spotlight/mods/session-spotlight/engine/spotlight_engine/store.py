@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .config import data_dir, ensure_private_dir
 
-SCHEMA_VERSION = "6"
+SCHEMA_VERSION = "7"
 MACHINE = "local"
 
 SCHEMA = """

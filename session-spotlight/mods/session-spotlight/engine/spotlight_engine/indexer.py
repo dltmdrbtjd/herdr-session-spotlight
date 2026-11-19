@@ -114,6 +114,7 @@ def _index(conn, cfg: Config, full: bool, started: float, progress) -> dict:
             plan.append((adapter, path))
     total = len(plan)
 
+    released_keys: List[str] = []  # sessions whose file gave them up: another copy may stand in
     for n, (adapter, path) in enumerate(plan, 1):
         key = str(path)
         seen.add(key)
@@ -125,7 +126,7 @@ def _index(conn, cfg: Config, full: bool, started: float, progress) -> dict:
         if row is not None and (row["size"], row["mtime_ns"]) == stamp:
             counts["unchanged"] += 1
             continue
-        mode = _index_file(conn, cfg, adapter, path, stamp, row)
+        mode = _index_file(conn, cfg, adapter, path, stamp, row, released_keys)
         counts[mode] = counts.get(mode, 0) + 1
         if time.time() - last_commit > COMMIT_EVERY_SECONDS:
             store.set_meta(conn, "progress", json.dumps({"done": n, "total": total}))
@@ -134,14 +135,27 @@ def _index(conn, cfg: Config, full: bool, started: float, progress) -> dict:
             if progress:
                 progress(n, total)
 
-    # History files that are gone take their sessions with them.
+    # History files that are gone take their sessions with them, but only the file a session
+    # was read from owns it: a rollout moved into archived_sessions/ was already re-read there.
     for key, row in known.items():
         if key in seen or row["agent"] not in enabled:
             continue
-        if row["session_key"]:
+        if row["session_key"] and _owns(conn, row["session_key"], key):
             store.delete_session(conn, row["session_key"])
+            _release(released_keys, row["session_key"])
         conn.execute("DELETE FROM sources WHERE path=?", (key,))
         counts["removed"] += 1
+    # A copy of a released session that was skipped as older can stand in for it now.
+    adapter_of = {str(p): a for a, p in plan}
+    for session in released_keys:
+        if conn.execute("SELECT 1 FROM sessions WHERE key=?", (session,)).fetchone():
+            continue  # someone already holds it again
+        for (path_str,) in conn.execute("SELECT path FROM sources WHERE session_key=?", (session,)).fetchall():
+            if path_str in adapter_of and os.path.exists(path_str):
+                stamp = file_stamp(Path(path_str))
+                if stamp is not None:
+                    mode = _index_file(conn, cfg, adapter_of[path_str], Path(path_str), stamp, None, released_keys)
+                    counts[mode] = counts.get(mode, 0) + 1
     # Agents switched off in the config leave too.
     for row in conn.execute("SELECT DISTINCT agent FROM sessions").fetchall():
         if row[0] not in enabled:
@@ -168,19 +182,67 @@ def _index(conn, cfg: Config, full: bool, started: float, progress) -> dict:
     return result
 
 
-def _index_file(conn, cfg: Config, adapter: Adapter, path: Path, stamp, row) -> str:
+_TEXT_STATE = ("first_prompt", "last_prompt", "title_custom", "title_ai", "title_summary", "title_agent")
+
+
+def _release(released, key) -> None:
+    if released is not None and key and key not in released:
+        released.append(key)
+
+
+def _owns(conn, key: str, path: str) -> bool:
+    row = conn.execute("SELECT source_path FROM sessions WHERE key=?", (key,)).fetchone()
+    return row is not None and row[0] == path
+
+
+def _fingerprint(path: Path, end: int) -> dict:
+    """What must still be true for bytes [0, end) to be the ones already indexed."""
+    try:
+        st = os.stat(path)
+        with path.open("rb") as handle:
+            head = handle.read(min(4096, end))
+            handle.seek(max(0, end - 256))
+            tail = handle.read(min(256, end))
+    except OSError:
+        return {}
+    return {
+        "ino": st.st_ino,
+        "dev": st.st_dev,
+        "head": hashlib.sha1(head).hexdigest(),
+        "tail": hashlib.sha1(tail).hexdigest(),
+    }
+
+
+def _stored_state(state: dict, fingerprint: dict) -> str:
+    """Parser state for the next append, with any text in it masked like the index."""
+    safe = {k: (redact(v) if k in _TEXT_STATE and isinstance(v, str) else v) for k, v in state.items()}
+    safe["_file"] = fingerprint
+    return json.dumps(safe, ensure_ascii=False)
+
+
+def _index_file(conn, cfg: Config, adapter: Adapter, path: Path, stamp, row, released=None) -> str:
     size, mtime_ns = stamp
+    # Append only when the file grew and the part already read is byte-for-byte the same file:
+    # same inode, same first 4 KiB, same 256 bytes before the stored offset. Anything else
+    # (an equal-sized rewrite, a replacement, a truncation) is read again from the start.
     append = (
         row is not None
         and row["session_key"]
         and adapter.appendable(path)
-        and size >= row["size"]
+        and size > row["size"]
         and row["offset"] <= size
     )
     if append:
         try:
             state = json.loads(row["state"])
         except ValueError:
+            append = False
+    if append:
+        kept = state.pop("_file", None) or {}
+        if not kept or kept != _fingerprint(path, row["offset"]):
+            append = False
+        elif not _owns(conn, row["session_key"], str(path)):
+            # A former owner (another copy took over): its parse state isn't the session's.
             append = False
     if not append:
         state = adapter.new_state(path)
@@ -206,10 +268,12 @@ def _index_file(conn, cfg: Config, adapter: Adapter, path: Path, stamp, row) -> 
         end = size
 
     meta = adapter.meta(state, path)
-    state_json = json.dumps(state, ensure_ascii=False)
     now = time.time()
 
-    def remember(session_key_value):
+    def remember(session_key_value, keep_state=True):
+        # Sources that aren't a session of their own (skipped, excluded, an older copy) keep no
+        # text at all: they are read again whenever they change.
+        state_json = _stored_state(state, _fingerprint(path, end)) if keep_state else "{}"
         conn.execute(
             "INSERT INTO sources(path, agent, session_key, size, mtime_ns, offset, state, indexed_at) VALUES (?,?,?,?,?,?,?,?) "
             "ON CONFLICT(path) DO UPDATE SET agent=excluded.agent, session_key=excluded.session_key, size=excluded.size, "
@@ -218,37 +282,37 @@ def _index_file(conn, cfg: Config, adapter: Adapter, path: Path, stamp, row) -> 
         )
 
     old_key = row["session_key"] if row is not None else None
-    if meta is None:
-        if old_key:
+    # Only the file a session was read from may remove it.
+    owned_old = bool(old_key) and _owns(conn, old_key, str(path))
+    if meta is None or (meta["is_subagent"] and not cfg.include_subagents) or cfg.excluded(meta["cwd"]):
+        if owned_old:
             store.delete_session(conn, old_key)
-        remember(None)
-        return "skipped"
-    if meta["is_subagent"] and not cfg.include_subagents:
-        if old_key:
-            store.delete_session(conn, old_key)
-        remember(None)
-        return "skipped"
-    if cfg.excluded(meta["cwd"]):
-        if old_key:
-            store.delete_session(conn, old_key)
-        remember(None)
-        return "excluded"
+            _release(released, old_key)
+        remember(None, keep_state=False)
+        return "excluded" if meta is not None and cfg.excluded(meta["cwd"]) else "skipped"
 
     key = store.session_key(adapter.agent, meta["session_id"])
     existing = conn.execute("SELECT source_path, updated_at FROM sessions WHERE key=?", (key,)).fetchone()
     if existing is not None and existing["source_path"] != str(path) and os.path.exists(existing["source_path"]):
-        # The same session in two files (a copy, an archive): the newer one wins.
+        # The same session in two files (a copy, an archive): the newer one wins. The older copy
+        # remembers the key so it can stand in if the newer file goes away.
         if existing["updated_at"] >= (meta["updated_at"] or 0):
-            remember(None)
+            if owned_old and old_key != key:
+                store.delete_session(conn, old_key)
+                _release(released, old_key)
+            remember(key, keep_state=False)
             return "skipped"
         append = False
     if append and old_key != key:
         # The file now names another session: read it whole.
-        store.delete_session(conn, old_key)
-        return _index_file(conn, cfg, adapter, path, stamp, None)
-    if not append:
-        if old_key and old_key != key:
+        if owned_old:
             store.delete_session(conn, old_key)
+            _release(released, old_key)
+        return _index_file(conn, cfg, adapter, path, stamp, None, released)
+    if not append:
+        if owned_old and old_key != key:
+            store.delete_session(conn, old_key)
+            _release(released, old_key)
         store.delete_session(conn, key)
 
     updated = meta["updated_at"] or (mtime_ns / 1e9)
