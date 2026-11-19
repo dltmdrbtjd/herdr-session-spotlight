@@ -1,125 +1,143 @@
-# 검증 결과 (2026-11-19)
+# Verification (2026-11-19)
 
-환경: macOS Darwin 25.6 (Apple Silicon), Herdr App 0.1.16 / herdr-core 0.1.21, Claude Code 2.1.283, Codex CLI 0.169.1, Python 3.14.3 (+ 3.9.6), SQLite 3.53.4 (+ 3.51.0).
-실제 기록: Claude 175 + Codex 37 세션 (212세션, 7,081 메시지; 원본 JSONL 약 1GB 중 대부분은 도구 출력이라 제외).
+**English** · [한국어](VERIFICATION.ko.md)
 
-## 자동 테스트
+Environment: macOS (Darwin 25.6, Apple Silicon), Herdr app 0.1.16 / herdr-core 0.1.21, Claude Code 2.1.283,
+Codex CLI 0.169.1, Python 3.14.3 (and 3.9.6), SQLite 3.53.4 (and 3.51.0).
+Real history: 175 Claude + 37 Codex sessions (212 sessions, 7,081 indexed messages; most of the ~1 GB of raw
+JSONL is tool output, which is left out).
 
-| 항목 | 실행 주체 | 결과 |
+## Automated tests
+
+| What | Run by | Result |
 |---|---|---|
-| 엔진 단위 테스트 (`tests/engine`, 51개: 어댑터·노이즈 제외·마스킹(파서 상태·자르기 전)·권한·증분/같은 크기 재작성/교체/삭제/제외/스키마 변경·아카이브 이동·사본 대체·이전 소유 파일·잠금·reset 경합·검색·연산자·정렬·라이브 매핑(procStart/startedAt·Codex 다중 rollout·argv 억제)·미리보기·재개 판정) | Lead + Herdr 테스트 자식(t4t → t51 → t52) | 51/51 통과 (Python 3.14.3, 3.9.6 모두) |
-| Mod 순수 로직 (`tests/mod`, 21개: 시간·필터 인자·칩·라이브 터미널·하위 에이전트 위치·같은 이름 Space 포커스·`decideOpen` 거절 조건·재개 위치·런처) | Lead + t52 | 21/21 통과 |
-| `herdr-app check mods/session-spotlight` | Lead(매 변경) + t4t | 통과 |
-| `spotlight.py doctor` | t4t | FTS5 trigram·zstd 사용 가능, 인덱스 0600 |
+| Engine unit tests (`tests/engine`, 51): adapters, skipped noise, masking (parser state, before cutting), permissions, incremental indexing (append, equal-sized rewrite, replacement, delete, exclusion, schema change), archive moves, copies standing in, former owners, locks, reset race, search, operators, sorting, live mapping (procStart / startedAt, several Codex rollouts, argv suppression), preview, resume checks | lead + Herdr test-runner children | 51/51 on Python 3.14.3 and 3.9.6 |
+| Mod logic (`tests/mod`, 23): dates, filter arguments, chips, live terminals, sub-agent placement, same-named Spaces, `decideOpen` refusals, resume target, launcher, status labels, English default and the Korean switch | lead + Herdr test-runner child | 23/23 |
+| `herdr-app check mods/session-spotlight` | lead (every change) + test runner | passed |
+| `spotlight.py doctor` | test runner | FTS5 trigram and zstd available, index `0600` |
 
-## 실제 Herdr 앱 시나리오
+## Scenarios in the real Herdr app
 
-`scripts/drive.sh`로 열린 모달을 조작(`herdr-app do session-spotlight.<command>`)하고 `herdr-app status` / `hc` / `herdr-app shot`으로 결과를 확인했습니다. 테스트용 세션은 고유 토큰을 넣은 짧은 `claude -p`(3개)·`codex exec`(1개) 세션을 스크래치 폴더와 이 저장소 폴더에서 새로 만들어 썼고, 끝난 뒤 테스트 Space·탭을 닫았습니다.
+An open dialog was driven with `scripts/drive.sh` (`herdr-app do session-spotlight.<command>`), and the results were
+read back with `herdr-app status`, `hc` and `herdr-app shot`. Test sessions were small `claude -p` (4) and
+`codex exec` (1) runs with a unique token, made in a scratch folder and in this repository's folder; the test Spaces
+and tabs were closed afterwards. These runs used the Korean UI that existed at the time; the English UI was then
+checked with the same unit tests and `herdr-app check`.
 
-| # | 시나리오 | 결과 | 근거 |
+| # | Scenario | Result | Evidence |
 |---|---|---|---|
-| 1 | 모달 열기·닫기 | **부분 성공** | `mod.open`으로 열림, 입력창 포커스, `closeOverlay`로 닫힘. 사용자가 실제로 `Cmd+Shift+K`를 눌러 Notion 전역 검색이 대신 뜨는 충돌을 발견 → `Cmd+K`로 변경, `keys()`에 `cmd-k → mod.open:session-spotlight` 로드 확인. **`Cmd+K`·`Esc` 실제 키 입력은 아직 미검증** |
-| 2 | 검색어 없는 최근 목록 | 성공 | "실행 중 8" → "최근 세션" 순, 마지막 활동 내림차순, 상태 배지(작업 중/실행 중) |
-| 3 | Claude 제목 검색 | 성공 | "task tree" → 제목 일치 3개 상위, 하이라이트 |
-| 4 | Codex 검색 | 성공 | `agent:codex 리뷰`, 테스트 토큰으로 Codex 세션 단독 검색 |
-| 5 | 대화 본문 검색 | 성공 | "프로필" → 본문 스니펫(일치어 앞 14자부터), 미리보기가 일치 메시지로 스크롤·하이라이트 |
-| 6 | 날짜·프로젝트 필터 | 성공 | Codex+최근 30일 → 31개, 프로젝트 `acme`(데모) → 8개, 칩 강조, 드롭다운 표시 |
-| 7 | 정렬 변경 | 성공 | 오래된순: 10월 22일 세션이 맨 위, 보관된 Codex 세션은 "재개할 수 없음" 표시 |
-| 8 | 같은 이름의 다른 Space | 성공 | 두 Space 이름을 모두 `spotlight-same`으로 바꾼 뒤 beta→alpha→beta 순으로 열기: 매번 해당 Space id·pane id 일치, 터미널 수 12→12 |
-| 9 | 실행 중 세션 포커스 | 성공 | 다른 Space에서 delta 세션 Enter → 터미널 11→11, 포커스 pane = t4j의 pane |
-| 10 | 종료된 세션 재개 | **Claude 성공 / Codex 부분 성공** | Claude(신뢰된 폴더): 기존 Space에 새 탭, `claude --resume <id>`, 새 프로세스의 `sessions/<pid>.json` sessionId = 원래 id, 이전 대화 화면 로드. Claude(새 폴더 2개): 정확한 cwd에서 `claude --resume <id>` 실행 후 Claude 자체 폴더 신뢰 화면에서 정지(승인하지 않음), argv로 같은 세션에 매핑. Codex: 새 Space에서 `codex --no-daemon resume <id> -C <원래 폴더>` 실행, Codex 업데이트 안내 화면에서 정지(조작하지 않음) — **Codex 대화 로드 자체는 미확인** |
-| 11 | 존재하지 않는 세션 | 성공 | 목록에 띄운 뒤 기록 파일 삭제 → Enter: "세션 기록 파일이 삭제되었습니다" 표시, 터미널 14→14 (새로 만들지 않음). 이후 인덱스에서 제거 |
-| 12 | 결과 0건 | 성공 | "“…”와 일치하는 세션이 없습니다" + 안내, 미리보기 빈 상태 |
-| 13 | 대량 인덱싱 성능 | 측정 | 아래 표 |
-| 14 | Herdr 재시작 후 인덱스 유지 | **부분** | 인덱스는 앱 밖의 파일(`~/.local/share/...`)이라 수십 번의 Mod 핫 리로드·모달 재오픈 후에도 유지되고 재구축 없이 즉시 표시됨. **실행 중인 다른 세션·에이전트를 방해하지 않으려고 Herdr 앱 자체 재시작은 하지 않음 — 미검증** |
-| 15 | 기존 Mod·레이아웃 | 성공 | 작업 내내 `herdr-app status` errors `[]`, `*.error` 파일 없음. `programs.json`·`lead-policy.md`·`reviewer.md`·`settings.json` 수정 시각이 작업 시작 전 그대로. `keys.json`은 백업 후 1줄 추가만. 다른 Mod 파일 미변경 |
-| + | 하위 에이전트 위치 | 성공 | 다른 Space에 포커스한 상태에서 띄운 자식 Claude(t4r)가 부모 위치 `herdr-session-spotlight › Claude Lead`로 표시, 세션 id 매핑, Enter 시 `agent.focus`(peek) |
+| 1 | Open and close | **partly** | `mod.open` opens it with the field focused, `closeOverlay` closes it. The user found `Cmd+Shift+K` taken by Notion → changed to `Cmd+K`, loaded per `keys()`. **Pressing `Cmd+K` / `Esc` by hand: not yet verified** |
+| 2 | Recent list with nothing typed | passed | open sessions first, then recent ones by last activity, status pills |
+| 3 | Claude title search | passed | "task tree" → the three title matches on top, highlighted |
+| 4 | Codex search | passed | `agent:codex 리뷰`, the test token found the Codex session alone |
+| 5 | Conversation search | passed | snippet starts just before the match; the preview scrolls to and highlights the matching message |
+| 6 | Date and project filters | passed | Codex + last 30 days → 31; project `acme` (demo data) → 8; chips highlighted; dropdowns shown |
+| 7 | Sorting | passed | oldest first puts Oct 22 on top; an archived Codex session says it can't be resumed |
+| 8 | Same-named Spaces | passed | both test Spaces renamed `spotlight-same`; opening beta → alpha → beta focused the right Space id and pane id each time, terminal count 12 → 12 |
+| 9 | Focusing an open session | passed | Enter from another Space → terminal count 11 → 11, focused pane = the session's pane |
+| 10 | Resuming an ended session | **Claude passed / Codex partly** | Claude (trusted folder): a new tab in the existing Space, `claude --resume <id>`; the new process's `sessions/<pid>.json` has the original session id and the old conversation loaded. Claude (two new folders): `claude --resume <id>` in the right folder, stopped at Claude's own folder-trust screen (not answered), mapped to the same session through argv. Codex: `codex --no-daemon resume <id> -C <folder>` in a new Space, stopped at Codex's update notice (not touched) — **the Codex conversation loading itself wasn't seen** |
+| 11 | A session whose history is gone | passed | file deleted while listed → Enter shows "history file was deleted", terminal count 14 → 14, and the index drops it |
+| 12 | No results | passed | the "no sessions match" message and hint, empty preview |
+| 13 | Large-index performance | measured | below |
+| 14 | Index kept across a Herdr restart | **partly** | the index is a file outside the app (`~/.local/share/...`), kept across dozens of mod reloads and reopenings without a rebuild. **Herdr itself wasn't restarted, to avoid disturbing other running agents — not verified** |
+| 15 | Existing mods and layouts | passed | `herdr-app status` errors `[]` throughout, no `*.error` files; `programs.json`, `lead-policy.md`, `reviewer.md`, `settings.json` untouched (modification times before the work started); `keys.json` got one line after a backup; no other mod changed |
+| + | Sub-agent placement | passed | a child Claude started while another Space was focused showed up in its parent's place, with its session id; Enter used `agent.focus` (peek) |
+| + | Status labels | passed | after a user report that idle agents looked "running": only working agents get the spinner, idle ones a gray Idle pill |
 
-미검증: 라이트 테마 실화면(테마 토큰만 사용, 사용자 테마 설정을 바꾸지 않으려고 전환하지 않음), 920px보다 좁은 창에서의 대화상자 표시.
+Not verified: the light theme on screen (only theme tokens are used; the user's theme wasn't switched), and windows
+narrower than the 920 px dialog.
 
-## 성능
+## Performance
 
-Mod가 실행하는 명령은 `python3 -B -I -S spotlight.py search ...` 프로세스 하나입니다(시작 비용 약 30ms).
+The mod runs one process per search: `python3 -B -I -S spotlight.py search …` (about 30 ms to start).
 
-**실제 기록 (212세션, 7,081 메시지)** — 엔진 내부 시간 / 프로세스 전체(측정용 `python3 -c` 타임스탬프 오버헤드 약 20ms 포함)
+**Real history (212 sessions, 7,081 messages)** — engine time / whole process (the timing method adds about 20 ms)
 
-| 검색어 | 엔진 | 프로세스 |
+| Query | Engine | Process |
 |---|---|---|
-| (빈 검색) | 1.5ms | 49–54ms |
-| 프로필 | 5.4ms | 53–57ms |
-| task tree | 14.2ms | 62–69ms |
-| UI (2글자, 스캔) | 25.6ms | 74–82ms |
-| agent:codex 리뷰 | 1.7ms | 49–51ms |
-| 첫 인덱싱 / 변경 없음 / 일부 추가 | 2.4–3.0s / 6ms / 85ms | |
+| (empty) | 1.5 ms | 49–54 ms |
+| 프로필 | 5.4 ms | 53–57 ms |
+| task tree | 14.2 ms | 62–69 ms |
+| UI (two letters, scanned) | 25.6 ms | 74–82 ms |
+| agent:codex 리뷰 | 1.7 ms | 49–51 ms |
+| first index / nothing changed / a few appends | 2.4–3.0 s / 6 ms / 85 ms | |
 
-**합성 데이터** (`scripts/bench.py`, 20여 개 단어로 만든 최악 조건: 대부분 단어가 거의 모든 세션에 등장)
+**Synthetic data** (`scripts/bench.py`; about 20 words, so most words appear in nearly every session: a worst case)
 
-| 규모 | 원본 / 인덱스 | 첫 인덱싱 | 변경 없음 | 1% 파일 추가 | 엔진 검색 중앙값 | 프로세스 중앙값 |
+| Size | Raw / index | First index | Nothing changed | 1% of files appended | Engine search medians | Process median |
 |---|---|---|---|---|---|---|
-| 1,000세션 · 4만 메시지 | 88MB / 45MB | 2.1s | 10ms | 12ms | 5–56ms | **88–97ms** |
-| 3,000세션 · 18만 메시지 | 396MB / 186MB | 10.3s | 27ms | 33ms | 17–217ms | **255ms** |
+| 1,000 sessions · 40k messages | 88 MB / 45 MB | 2.1 s | 10 ms | 12 ms | 5–56 ms | **88–97 ms** |
+| 3,000 sessions · 180k messages | 396 MB / 186 MB | 10.3 s | 27 ms | 33 ms | 17–217 ms | **255 ms** |
 
-- 목표 100ms: 실제 기록과 1,000세션 합성 데이터에서는 충족, 3,000세션·18만 메시지의 다중 단어/2글자 검색은 초과.
-- 최적화 이력: FTS 결과→세션 매핑을 텍스트가 없는 좁은 테이블로 옮겨 단어당 38.8→16.9ms, 명령별 지연 import·`-I -S`로 시작 50→30ms.
-- UI 프리즈 방지: 검색·인덱싱·미리보기는 모두 `exec` 비동기, 입력 60ms 디바운스, 마지막 요청 결과만 반영, 결과 목록은 가상 리스트.
+- The 100 ms goal holds for the real history and for 1,000 synthetic sessions; multi-word and two-letter searches over
+  3,000 sessions / 180k messages exceed it.
+- Optimizations: FTS hits → sessions through a narrow table without text (38.8 → 16.9 ms per word); per-command
+  imports and `-I -S` (start 50 → 30 ms).
+- No UI freezes: search, indexing and previews all run through asynchronous `exec`; typing is debounced (60 ms), only
+  the newest answer is used, and the result list is virtualized.
 
-## 작업 중 발견해 고친 문제
+## Problems found and fixed during the work
 
-| 문제 | 발견 | 수정 |
+| Problem | Found by | Fix |
 |---|---|---|
-| 첫 프롬프트로 만든 제목에 비밀값이 그대로 저장됨 | 엔진 테스트 | 제목·Codex 스레드 이름도 마스킹, 스키마 버전 올려 재구축 |
-| Claude `cwd`가 세션 중 `cd`를 따라가 프로젝트·재개 폴더가 틀어짐 | 실제 기록 | 첫 `cwd`를 시작 폴더로 사용 |
-| `procStart`가 UTC·C 로캘이라 한국어 로캘 `ps`와 불일치 | 실제 pid 파일 | `ps`를 `TZ=UTC LC_ALL=C`로 실행 |
-| 인자 경로의 `claude-501` 때문에 Codex 터미널을 Claude로 판정 | 실제 앱 E2E | 프로그램 이름(argv[0], 런처 셸이 실행하는 프로그램)으로만 판정 |
-| 하위 에이전트가 라벨 때문에 다른 Space로 표시 | 실제 앱 | 부모 터미널의 pane 위치를 따름 |
-| 구 스키마 인덱스에서 검색 시 KeyError | 업그레이드 | 읽기 전용 연결이 스키마 불일치를 "준비 안 됨"으로 처리, 다음 인덱싱이 재구축 |
-| `-foo`처럼 `-`로 시작하는 검색어가 옵션으로 해석됨 | 자체 점검 | 엔진 인자를 `--name=value`로 전달 |
-| 미리보기 실패 시 "불러오는 중"에서 멈춤 | 자체 점검 | 오류 응답에도 세션 키를 붙여 메시지 표시 |
-| dialog 안 `absolute()` 드롭다운이 그려지지 않음 | 실제 앱 | gpui-kit `Popup` 사용 |
+| A title made from the first prompt stored a secret as is | engine test | titles and Codex thread names are masked too; the schema version forces a rebuild |
+| Claude's `cwd` follows `cd` mid-session, so project and resume folder drifted | real history | the first `cwd` is the session's folder |
+| `procStart` is UTC in the C locale, so a Korean-locale `ps` never matched | real pid files | `ps` runs with `TZ=UTC LC_ALL=C` |
+| A path argument containing `claude-501` made a Codex terminal look like Claude | end-to-end run | the agent is decided by program name only (argv[0], or what a launcher shell runs) |
+| A sub-agent's labels placed it in another Space | real app | placed by its parent terminal's pane |
+| An index built by an older schema crashed search | upgrade | a read-only connection treats it as "not ready"; the next index run rebuilds |
+| A query starting with `-` was read as an option | self-review | engine arguments are passed as `--name=value` |
+| A failed preview stayed on "Loading" | self-review | error answers carry the session key, so the message shows |
+| An `absolute()` dropdown inside the dialog never painted | real app | gpui-kit `Popup` |
+| Idle agents showed a yellow "running" pill | user report | Herdr's agent status is shown as is |
 
-## 독립 리뷰 (Codex, Herdr `reviewer` 템플릿, 읽기 전용) — 2회
+## Independent review (Codex, Herdr's `reviewer` template, read-only) — two passes
 
-리뷰어가 처음에는 Codex 폴더 신뢰 확인에서 멈췄고, 정책상 Lead가 승인하지 않아 사용자가 직접 승인했습니다. 첫 리뷰어 터미널(t4s)은 Lead가 다른 테스트 탭을 닫을 때 같은 탭에 붙어 있어 함께 종료됐고, 다시 띄웠습니다(t4v).
+The reviewer first stopped at Codex's folder-trust prompt; policy forbids the lead from answering it, so the user
+approved it. The first reviewer terminal was closed by the lead's own mistake (it was attached to a test tab that the
+lead closed) and was started again.
 
-**1차 (t4v, High 8 / Medium 3) — 모두 사실로 확인, 수정**
+**Pass 1 (High 8 / Medium 3) — all confirmed and fixed**
 
-| 지적 | 조치 |
+| Finding | Fix |
 |---|---|
-| 파서 상태(`sources.state`)에 마스킹 전 프롬프트·제목 저장, 제외된 기록도 저장 | 상태 텍스트 마스킹, 제외·스킵 기록은 상태 `{}` |
-| `"password": "…"`(JSON 키)가 마스킹되지 않음 | 따옴표 키·값 패턴 추가 |
-| 재개 직전 해석 실패·Codex 미식별이어도 재개로 진행 | Enter마다 재해석 + `decideOpen` 거절 규칙 |
-| 오래된 결과의 주소만으로 포커스(그 터미널이 다른 세션을 실행 중일 수 있음) | 세션을 실제로 가진 터미널을 찾아 이동 |
-| Codex 한 프로세스가 rollout을 여러 개 열면 마지막 것 선택 | 하위 에이전트 제외, 여럿이면 미식별 |
-| procStart 없는 Claude pid 파일을 그대로 신뢰 | `startedAt`이 프로세스 시작 직후일 때만 인정 |
-| 같은 크기 재작성/교체를 append로 처리 | 커졌을 때만 + inode·앞부분·오프셋 직전 해시 확인 |
-| rollout을 아카이브로 옮기면 세션이 사라짐 | 소유 파일만 세션 삭제, 다른 사본으로 대체 |
-| reset이 실행 중 인덱서와 경합 | 같은 잠금 아래에서 삭제, 잠금 파일 유지 |
-| keys.json 동시 수정·심볼릭 링크·권한 | 고유 임시 파일, 대상 파일 수정, 권한 보존, 변경 감지 |
-| 삭제 시 사용자가 만든 바인딩까지 제거 | 추가한 바인딩만 기록·제거 |
+| parser state (`sources.state`) kept unmasked prompts and titles, also for excluded files | state text masked; skipped and excluded files keep `{}` |
+| `"password": "…"` (JSON keys) wasn't masked | quoted key / value patterns |
+| a failed resolution or an unidentified Codex still led to a resume | Enter re-resolves; `decideOpen` refusal rules |
+| focusing by a stale address (that terminal may run another session now) | go to the terminal that holds the session now |
+| a Codex process with several rollouts open: the last one won | sub-agents set aside; several → unidentified |
+| Claude pid files without `procStart` were trusted | only when `startedAt` is right after the process start |
+| equal-sized rewrites / replacements treated as appends | only when grown, plus inode and prefix / pre-offset hashes |
+| moving a rollout into the archive lost the session | only the owning file removes a session; a copy stands in |
+| reset raced a running indexer | deletes under the same lock, keeps the lock file |
+| keys.json: concurrent edits, symlinks, permissions | unique temp file, edits the target, keeps the mode, detects changes |
+| uninstall removed bindings the user made | records and removes only what it added |
 
-**2차 (t50, 수정분 diff만, High 5 / Medium 5) — 모두 사실로 확인, 수정**
+**Pass 2 (only the fixes; High 5 / Medium 5) — all confirmed and fixed**
 
-| 지적 | 조치 |
+| Finding | Fix |
 |---|---|
-| 기존 인덱스의 평문 파서 상태가 변경 없는 파일에 남음 | 스키마 버전 7로 올려 전체 재구축 |
-| 400자 미리보기에서 닫는 따옴표가 잘리면 마스킹 실패, 400자 초과 값 미처리 | 자르기 전에 마스킹, 따옴표 값 길이 제한 제거·줄 끝까지 마스킹 |
-| 이전 소유 파일이 다시 새것이 되면 뒷부분만 읽어 기록 유실 | 현재 소유자일 때만 append |
-| 해석 도중 생긴 터미널이 빠진 채 재개 가능 | 물어본 터미널이 모두 답에 있어야 함 + 실행 직전 터미널 구성 비교 |
-| keys.json 동시 실행 경합 | 잠금 + 임시 파일을 먼저 만든 뒤 마지막에 변경 확인 |
-| 소유 파일이 잘리거나 다른 세션이 되면 사본이 대체하지 못함 | 세션을 내놓는 모든 경우에 사본 재검토 |
-| 모호한 Codex pid에 argv 폴백이 세션을 붙임 | 모호하면 argv 폴백도 막음, 하위 에이전트 rollout만 있으면 미식별 |
-| 세션 ID 없는 실행 중 항목이 셸만 남은 pane으로 이동 | 지금도 에이전트가 실행 중일 때만 이동 |
-| 이미 있던 사용자 바인딩을 설치 소유로 기록 | 이미 있으면 기록하지 않음 |
-| 모든 앱 홈이 기록 하나를 공유 | keys.json 실제 경로별로 기록 |
+| unmasked state stayed in existing indexes for unchanged files | schema 7 rebuilds |
+| a 400-character preview cut before the closing quote defeated masking; values over 400 chars | mask before cutting; quoted values of any length, to the line end if unterminated |
+| a former owner growing newer again: only its tail was read | append only by the current owner |
+| a terminal that appeared during resolution wasn't covered | every terminal asked about must be in the answer, plus a terminal-set check right before launch |
+| keys.json races between two installer runs | a lock, and the final change check after the temp file is ready |
+| an owner truncated or turned into another session left no copy standing in | copies reconsidered whenever a session is given up |
+| an ambiguous Codex pid could still get a session from argv | ambiguity blocks the argv fallback; a sub-agent rollout alone is unidentified |
+| an unidentified open row could focus a pane where only the shell remained | only while an agent still runs there |
+| an existing user binding got recorded as installed | not recorded when it already existed |
+| one ownership record shared by every Herdr home | recorded per real keys.json path |
 
-리뷰/수정은 정책상 최대 2회라 3차 리뷰는 하지 않았습니다. 대신 각 수정마다 회귀 테스트를 넣었습니다. 테스트가 실제로 버그를 잡는지도 확인했습니다: 수정 전 엔진에서는 12개가 실패하고, 소유권 검사 하나만 빼도 해당 테스트가 실패합니다.
+The policy allows two review/fix passes, so there was no third review; every fix got a regression test instead. The
+tests were checked to catch the bugs: 12 fail against the pre-fix engine, and removing the ownership check alone fails
+its test.
 
-**수정 후 실제 앱 재검증**
+**Re-verified in the app after the fixes**
 
-| 시나리오 | 결과 |
+| Scenario | Result |
 |---|---|
-| 세션 미식별 Claude 터미널(신뢰 화면에 멈춘 자식)이 있을 때 재개 | 거절, 해당 주소 표시, 새 터미널 없음 |
-| 그 터미널을 치운 뒤 재개 | 새 탭에서 `claude --resume`, 새 프로세스의 pid 파일 sessionId = 원래 세션 |
-| 재개된 세션에 다시 Enter | 새로 띄우지 않고 그 터미널로 포커스 (터미널 수 동일) |
-| 작업 폴더가 사라진 세션 | "작업 디렉터리가 없습니다", 새 터미널 없음 |
-| 실제 인덱스 재구축 후 파서 상태 검사 | 비밀값 형태 0건 (220개 소스 중 스킵·제외 5개는 상태 비움) |
+| resuming while an unidentified Claude terminal (a child on its trust screen) exists | refused, its address shown, no new terminal |
+| resuming after that terminal is gone | `claude --resume` in a new tab; the new process's pid file has the original session id |
+| Enter again on the resumed session | focused, nothing new started |
+| a session whose folder is gone | "working folder is gone", no new terminal |
+| scanning parser state after the real index was rebuilt | 0 secret-shaped values (5 of 220 sources are skipped / excluded and keep no state) |
