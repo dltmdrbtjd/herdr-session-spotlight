@@ -195,11 +195,16 @@ def stats(conn: sqlite3.Connection) -> dict:
 
 
 def reset() -> list:
+    """Deletes the index files while holding the indexer's lock, so no indexer is mid-write.
+    The lock file itself stays: a new one would let a second indexer run beside the first."""
+    from .indexer import IndexLock
+
     removed = []
     path = index_path()
-    for suffix in ("", "-wal", "-shm", ".lock"):
-        p = Path(str(path) + suffix) if suffix != ".lock" else path.with_name("index.lock")
-        if p.exists():
-            p.unlink()
-            removed.append(str(p))
+    with IndexLock(path.with_name("index.lock")):  # raises indexer.Busy while one runs
+        for suffix in ("", "-wal", "-shm"):
+            p = Path(str(path) + suffix)
+            if p.exists():
+                p.unlink()
+                removed.append(str(p))
     return removed

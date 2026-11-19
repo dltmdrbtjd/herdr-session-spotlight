@@ -127,7 +127,12 @@ def cmd_stats(_args) -> int:
 def cmd_reset(args) -> int:
     if not args.yes:
         return emit({"ok": False, "error": "confirm", "message": "pass --yes to delete the index"})
-    return emit({"ok": True, "removed": store.reset()})
+    from .indexer import Busy
+
+    try:
+        return emit({"ok": True, "removed": store.reset()})
+    except Busy:
+        return emit({"ok": False, "error": "busy", "message": "an indexer is running; try again in a moment"})
 
 
 def cmd_doctor(_args) -> int:
