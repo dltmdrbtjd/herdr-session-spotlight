@@ -210,3 +210,12 @@ test("a sub-agent is placed in its parent's tab, not where its labels point", ()
   assert.equal(sub.space_id, "spA");
   assert.equal(sub.parent, "t1");
 });
+
+test("status labels follow Herdr's agent status; idle doesn't read as running", () => {
+  assert.deepEqual(L.statusLabel("working"), { label: "작업 중", tone: "working", spin: true });
+  assert.equal(L.statusLabel("blocked").label, "입력 대기");
+  assert.equal(L.statusLabel("done").label, "완료");
+  for (const s of ["idle", "", null, undefined]) assert.deepEqual(L.statusLabel(s), { label: "대기 중", tone: "idle" });
+  const items = L.listItems([{ key: "a", running: { address: "t1" } }], { query: "", sort: "auto" });
+  assert.equal(items[0].label, "열린 세션");
+});

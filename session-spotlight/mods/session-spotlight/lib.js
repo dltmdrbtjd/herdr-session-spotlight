@@ -18,7 +18,7 @@ export const AGENT_OPTIONS = [
 ];
 export const STATUS_OPTIONS = [
   { value: "all", label: "모든 상태" },
-  { value: "running", label: "실행 중" },
+  { value: "running", label: "열려 있음" },
   { value: "ended", label: "종료됨" },
 ];
 export const SORT_OPTIONS = [
@@ -240,6 +240,18 @@ export function liveForSearch(live, resolved) {
 // ---------------------------------------------------------------------------
 // The list
 
+/**
+ * How an open session's agent status reads, as Herdr reports it (OSC 7501). An agent waiting
+ * for input is open but not running anything: it must not look like it's working.
+ *   tone: the theme color name (working, blocked, done, idle)
+ */
+export function statusLabel(status) {
+  if (status === "working") return { label: "작업 중", tone: "working", spin: true };
+  if (status === "blocked") return { label: "입력 대기", tone: "blocked" };
+  if (status === "done") return { label: "완료", tone: "done" };
+  return { label: "대기 중", tone: "idle" };
+}
+
 export const ROW_H = 58;
 export const ROW_SNIPPET_H = 78;
 export const HEAD_H = 30;
@@ -256,7 +268,7 @@ export function listItems(results, { query, sort }) {
     const running = results.filter((r) => r.running);
     const rest = results.filter((r) => !r.running);
     if (running.length) {
-      items.push({ kind: "head", key: "h-running", label: "실행 중", count: running.length });
+      items.push({ kind: "head", key: "h-running", label: "열린 세션", count: running.length });
       running.forEach((r) => items.push({ kind: "row", key: r.key, r }));
     }
     if (rest.length) {

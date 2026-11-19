@@ -386,7 +386,7 @@ export default class SessionSpotlight extends View {
         for (const [name, args] of plan.steps) run(name, args);
         this.resuming = null;
         if (!r.running || r.running.address !== plan.address) {
-          notify({ title: "Session Spotlight", body: `이 세션은 ${plan.address}에서 실행 중이라 그 터미널로 이동했습니다.`, level: "info" });
+          notify({ title: "Session Spotlight", body: `이 세션은 ${plan.address}에 열려 있어 그 터미널로 이동했습니다.`, level: "info" });
         }
         return this.close();
       }
@@ -449,11 +449,17 @@ export default class SessionSpotlight extends View {
   }
 
   statusPill(status, t) {
-    const color = status === "blocked" ? t.blocked : status === "working" ? t.working : status === "done" ? t.done : t.working;
-    const label = status === "blocked" ? "입력 대기" : status === "working" ? "작업 중" : "실행 중";
+    const s = L.statusLabel(status);
+    // Idle reads quietly (no tinted pill): open in a terminal, doing nothing.
+    if (s.tone === "idle") {
+      return h_flex().flex_none().h(18).px(7).gap(5).items_center().rounded(9).bg(t.hover)
+        .child(div().size(6).rounded(3).bg(t.idle ?? t.dim))
+        .child(div().text_size(10.5).text_color(t.muted).child(s.label));
+    }
+    const color = t[s.tone] ?? t.accent;
     return h_flex().flex_none().h(18).px(7).gap(5).items_center().rounded(9).bg(tint(color, "1f"))
-      .child(status === "working" ? svg(ICON("spinner")).size(9).text_color(color).spin(900) : div().size(6).rounded(3).bg(color))
-      .child(div().text_size(10.5).font_medium().text_color(color).child(label));
+      .child(s.spin ? svg(ICON("spinner")).size(9).text_color(color).spin(900) : div().size(6).rounded(3).bg(color))
+      .child(div().text_size(10.5).font_medium().text_color(color).child(s.label));
   }
 
   segs(segments, color, hit, opts = {}) {
@@ -595,7 +601,7 @@ export default class SessionSpotlight extends View {
 
     let action;
     if (r.running) {
-      action = { icon: "arrow-up-right", color: t.accent, text: `↵  실행 중인 터미널로 이동 · ${where} (${r.running.address})` };
+      action = { icon: "arrow-up-right", color: t.accent, text: `↵  열려 있는 터미널로 이동 · ${where} (${r.running.address})` };
     } else if (r.kind === "live") {
       action = { icon: "terminal", color: t.dim, text: "터미널이 종료되었습니다" };
     } else if (r.resumable) {
