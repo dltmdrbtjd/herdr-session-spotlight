@@ -1,6 +1,6 @@
 # Session Spotlight
 
-Cmd+Shift+K opens a centered search dialog over every Claude Code and Codex session on this computer, running or ended. Type to search titles, what was said, projects and folders; the list shows the running ones first, then recent ones. Enter goes to the exact terminal that runs a session, or resumes an ended one in its own folder. Everything is indexed locally by a small Python program that ships inside the mod.
+Cmd+K opens a centered search dialog over every Claude Code and Codex session on this computer, running or ended. Type to search titles, what was said, projects and folders; the list shows the running ones first, then recent ones. Enter goes to the exact terminal that runs a session, or resumes an ended one in its own folder. Everything is indexed locally by a small Python program that ships inside the mod.
 
 ![Session Spotlight](preview.png)
 
@@ -22,13 +22,14 @@ Cmd+Shift+K opens a centered search dialog over every Claude Code and Codex sess
 - Opening shows the last list at once (kept in module scope), focuses the field, then in parallel: maps running terminals to sessions (`resolve`), updates the index incrementally (`index`), and searches. Typing searches 60 ms after the last key; only the newest answer is used. Running terminals are re-checked every 4 s while open.
 - ↑/↓ and PageUp/PageDown move the selection (headers are skipped, the list scrolls only as far as needed). Click selects; clicking the selected row opens it. Tab / Shift+Tab walk the chip menus; in a menu ↑/↓ choose, Enter applies, ←/→ move to the next chip, Esc closes the menu. Esc closes the dialog.
 - Typed operators narrow further and show in their chip: `project:` (substring of the project or Space name), `agent:claude|codex|other`, `after:` / `before:` (`YYYY-MM-DD`, `today`, `7d`, `2w`), `status:running|ended`, `sort:recent|created|relevance|oldest`. "사용자 지정…" in the date menu writes `after:<a week ago> before:<today>` into the field with the first date selected.
-- **Enter on a running session:** `space.select`, `tab.select`, `pane.focus {terminal}` with its exact address; a sub-agent without a pane gets `agent.focus`, anything else `terminal.peek`. Nothing is started.
-- **Enter on an ended session:** the engine checks the history file and folder still exist (else a warning in the footer, and the index is refreshed), then running terminals are mapped once more: if one runs the session now, it is focused instead. Otherwise the agent's launcher from `knownAgents()` (programs.json `run`) plus `--resume <id>` (Claude) or `resume <id> -C <folder>` (Codex) starts in a new tab named after the session, in the Space it was last seen in, else a Space on its folder, else a new Space on that folder. The same session can't be started twice within 15 s. A toast confirms.
+- **Enter always asks again** where the session runs (`resolve` on the current terminals) and decides with `decideOpen()` (lib.js). It starts nothing, and shows why in the footer, when that answer failed, when a terminal it asked about is missing from it, when a terminal of the same agent couldn't be identified, or when the terminal holding the session can't be focused.
+- **A terminal holds the session:** `space.select`, `tab.select`, `pane.focus {terminal}` with that exact address (the list's address may be stale); a sub-agent without a pane gets `agent.focus`, anything else `terminal.peek`. Nothing is started.
+- **No terminal holds it:** the engine checks the history file and folder still exist (else a warning, and the index is refreshed); if the terminals changed while checking, it stops. Otherwise the agent's launcher from `knownAgents()` (programs.json `run`) plus `--resume <id>` (Claude) or `resume <id> -C <folder>` (Codex) starts in a new tab named after the session, in the Space it was last seen in, else a Space on its folder, else a new Space on that folder. The same session can't be started twice within 15 s. A toast confirms.
 
 ## Built from
 
 - **One mod**, `mods/session-spotlight/`: `main.js` (the View), `lib.js` (pure helpers, tested with node), `mod.json` (`place: "none"`, `overlay: {kind: "dialog", width: 920, height: 640}`), `icons/*.svg`, and `engine/` (Python 3.9+ standard library).
-- **A `keys.json` snippet**: `"global": {"cmd-shift-k": "mod.open:session-spotlight"}`.
+- **A `keys.json` snippet**: `"global": {"cmd-k": "mod.open:session-spotlight"}`. (Not Cmd+Shift+K: the Notion desktop app takes that one system-wide, so it never reaches Herdr.)
 - **Herdr functions:** `exec`, `knownAgents`, `terminals`, `agents`, `panes`, `spaces`, `run`, `notify`, `theme`, `settings`, `props`, `closeOverlay`, `appHome`, `checking`, `nextCommand`.
 - **Commands:** `space.select`, `tab.select`, `pane.focus`, `agent.focus`, `terminal.peek`, `tab.new {space, folder, argv, name}`, `space.new {folder, argv, tab}`.
 - **The engine**, run as `python3 -B -I -S engine/spotlight.py <command>`, prints one JSON object:
@@ -57,7 +58,7 @@ Cmd+Shift+K opens a centered search dialog over every Claude Code and Codex sess
 ## Done when
 
 - `herdr-app check mods/session-spotlight` passes; `python3 -B -m unittest discover -s tests/engine` and `node --test tests/mod/*.test.mjs` pass.
-- Cmd+Shift+K opens the dialog with the field focused; Esc closes it.
+- Cmd+K opens the dialog with the field focused; Esc closes it.
 - With nothing typed, running sessions come first, then sessions by last activity, each with project · agent · time.
 - A word from a session's title lists it first; a word only said in a conversation lists it with a highlighted snippet, and the preview opens on that message.
 - `agent:codex`, a date chip, the project chip and each sort change the list as named.

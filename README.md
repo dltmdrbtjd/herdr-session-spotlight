@@ -1,7 +1,7 @@
 # Herdr Session Spotlight
 
 Claude Code와 Codex의 **실행 중·종료된 세션을 한 검색창에서 찾고, 그 세션으로 바로 돌아가는** Herdr App Mod입니다.
-`Cmd+Shift+K`로 열고, 세션 제목·대화 내용·프로젝트·폴더·날짜·에이전트로 검색합니다. 실행 중인 세션은 정확한
+`Cmd+K`로 열고, 세션 제목·대화 내용·프로젝트·폴더·날짜·에이전트로 검색합니다. 실행 중인 세션은 정확한
 터미널로 포커스하고, 종료된 세션은 원래 작업 디렉터리에서 공식 재개 명령(`claude --resume`, `codex resume`)으로 이어갑니다.
 
 > A Spotlight-style search for every Claude Code and Codex session on this computer, inside the Herdr app.
@@ -38,7 +38,7 @@ Claude Code와 Codex의 **실행 중·종료된 세션을 한 검색창에서 �
 
 | 키 | 동작 |
 |---|---|
-| `Cmd+Shift+K` | 열기 / 닫기 (Herdr 전역 단축키, `keys.json`) |
+| `Cmd+K` | 열기 / 닫기 (Herdr 전역 단축키, `keys.json`) |
 | 입력 | 즉시 검색 (60ms 디바운스) |
 | `↑` `↓` / `PageUp` `PageDown` | 결과 선택 |
 | `Enter` | 실행 중이면 그 터미널로 이동, 종료됐으면 재개 |
@@ -53,15 +53,21 @@ Claude Code와 Codex의 **실행 중·종료된 세션을 한 검색창에서 �
 ```sh
 git clone <this repo> herdr-session-spotlight
 cd herdr-session-spotlight
-scripts/install.sh                 # 다른 키: scripts/install.sh --key cmd-alt-k / 키 없이: --no-key
+scripts/install.sh                 # 다른 키: scripts/install.sh --key cmd-shift-o / 키 없이: --no-key
 ```
 
 `install.sh`가 하는 일:
 
 1. `session-spotlight/mods/session-spotlight/` → `~/.config/herdr-app/mods/session-spotlight/` 복사
    (같은 이름의 다른 Mod가 있으면 중단)
-2. `keys.json`에 `"cmd-shift-k": "mod.open:session-spotlight"` **한 줄만** 추가
-   (먼저 `keys.json.spotlight-backup-<시각>`으로 백업, 이미 다른 동작에 쓰는 키면 중단)
+2. `keys.json`에 `"cmd-k": "mod.open:session-spotlight"` **한 줄만** 추가
+   (먼저 `keys.json.spotlight-backup-<시각>`으로 백업, 이미 다른 동작에 쓰는 키면 복사 전에 중단.
+   심볼릭 링크로 관리하는 `keys.json`은 대상 파일을 권한 그대로 수정. 추가한 바인딩은
+   `~/.config/herdr-session-spotlight/installed-keys.json`에 기록해, 삭제 때 그것만 지움)
+
+> **단축키 충돌 주의**: 다른 앱이 macOS 전역 단축키로 잡은 키는 Herdr까지 오지 않습니다.
+> 예를 들어 Notion 데스크톱 앱은 `Cmd+Shift+K`를 전역 검색에 쓰기 때문에 처음 정했던 이 키를 `Cmd+K`로 바꿨습니다.
+> Slack·Notion 등의 `Cmd+K`는 그 앱 안에서만 동작하므로 충돌하지 않습니다.
 3. `spotlight.py doctor`(Python/SQLite/FTS5 확인)와 `herdr-app check` 실행
 
 인덱스는 처음 열 때 만들어집니다(이 개발 환경 기준 Claude 175 + Codex 32 세션, 약 3초).
@@ -72,7 +78,7 @@ Herdr에게 맡기려면: *"~/.config/herdr-app/AGENTS.md를 읽고 이 Mod를 �
 ### 삭제
 
 ```sh
-scripts/uninstall.sh            # Mod 폴더 + 단축키 제거 (keys.json은 백업 후 수정)
+scripts/uninstall.sh            # Mod 폴더 + 이 스크립트가 추가한 단축키만 제거 (keys.json은 백업 후 수정)
 scripts/uninstall.sh --purge    # 로컬 인덱스와 설정까지 제거
 ```
 
@@ -110,8 +116,15 @@ session-spotlight/mods/session-spotlight/
 - 둘 다 실패하면 포그라운드 명령의 `--resume <uuid>` / `resume <uuid>`.
 - 하위 에이전트(pane 없는 `hc run` 자식)는 Herdr처럼 **부모 터미널의 탭**에 속한 것으로 표시합니다.
 
-열기는 `space.select → tab.select → pane.focus {terminal: <정확한 주소>}` 순서로 실행하므로, 이름이 같은 Space가 여러 개여도 혼동하지 않습니다.
-재개 직전에는 기록 파일·작업 폴더 존재를 다시 확인하고, 실행 중 터미널을 한 번 더 조회해 이미 실행 중이면 새로 띄우지 않고 그 터미널로 이동합니다.
+Enter를 누를 때마다 실행 중 터미널을 **새로 조회**한 뒤 결정합니다(목록의 이전 결과를 믿지 않음).
+
+- 그 세션을 가진 터미널이 있으면 `space.select → tab.select → pane.focus {terminal: <정확한 주소>}`로 이동합니다. 이름이 같은 Space가 여러 개여도 혼동하지 않습니다.
+- 없으면 기록 파일·작업 폴더를 확인한 뒤 재개합니다.
+- 다음 경우에는 **아무것도 실행하지 않고** 이유를 표시합니다(중복 실행보다 거절이 낫다는 원칙).
+  - 조회가 실패했거나 일부 터미널이 답에서 빠짐
+  - 같은 에이전트인데 세션을 식별하지 못한 터미널이 있음(예: 폴더 신뢰 화면에 멈춘 Claude, 열린 rollout이 여럿인 Codex)
+  - 세션을 가진 터미널로 이동할 수 없음
+  - 확인하는 동안 터미널 구성이 바뀜
 
 ## 인덱스와 보안 정책
 
@@ -130,7 +143,7 @@ session-spotlight/mods/session-spotlight/
   ```
   `exclude_paths`에 걸리는 폴더에서 시작된 세션은 인덱싱하지 않고, 나중에 추가하면 기존 항목도 지웁니다.
 - **인덱싱 대상**: 사용자 메시지와 에이전트 텍스트 응답만. 도구 호출·도구 결과(파일 내용, 명령 출력)·thinking·첨부·환경/지침 블록(`<system-reminder>`, `AGENTS.md` 지침, `<environment_context>` 등)은 **제외**합니다.
-- **비밀값 마스킹**: 저장 전에 API 키(`sk-…`, `AKIA…`, `ghp_…`, `xox…`, `AIza…`, JWT, PEM 개인키), `Bearer` 토큰, `password=`/`api_key:` 형태의 값, URL 속 비밀번호를 `[REDACTED]`로 바꿉니다. 제목에도 적용됩니다.
+- **비밀값 마스킹**: 저장 전에 API 키(`sk-…`, `AKIA…`, `ghp_…`, `xox…`, `AIza…`, JWT, PEM 개인키), `Bearer` 토큰, `password=`/`api_key:`/`"password": "…"`(JSON) 형태의 값, URL 속 비밀번호를 `[REDACTED]`로 바꿉니다. 메시지·제목·첫/마지막 프롬프트·증분 인덱싱용 파서 상태에 모두 적용하고, 프롬프트는 자르기 **전에** 마스킹합니다. 제외·스킵된 기록은 파서 상태도 남기지 않습니다.
 - **네트워크**: 사용하지 않습니다. Mod는 로컬 `python3` 프로세스만 실행합니다(`exec`).
 - **권한**: 전체 디스크 접근 권한이 필요 없습니다. 읽는 곳은 `~/.claude/projects`, `~/.claude/sessions`, `~/.codex/sessions`, `~/.codex/archived_sessions`, `~/.codex/session_index.jsonl` 뿐입니다.
 - **삭제·재생성**: `python3 ~/.config/herdr-app/mods/session-spotlight/engine/spotlight.py reset --yes` 후 모달을 열면 다시 만듭니다. `index --full`은 즉시 전체 재구축.
@@ -161,8 +174,8 @@ session-spotlight/mods/session-spotlight/
 ## 개발
 
 ```sh
-python3 -B -m unittest discover -s tests/engine -v      # 엔진 (40)
-node --test tests/mod/*.test.mjs                          # Mod 순수 로직 (17)
+python3 -B -m unittest discover -s tests/engine -v      # 엔진 (51)
+node --test tests/mod/*.test.mjs                          # Mod 순수 로직 (21)
 scripts/dev-sync.sh && herdr-app check ~/.config/herdr-app/mods/session-spotlight
 python3 -B scripts/bench.py --sessions 1000 --messages 40 # 합성 벤치마크
 scripts/drive.sh open|query <text>|down|enter|filter <kind> <value>|menu <kind>|shot <file>|close

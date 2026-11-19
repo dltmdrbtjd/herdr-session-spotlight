@@ -11,7 +11,7 @@
 | 새 탭/Space에서 실행 | `tab.new {space, folder, argv, name}`, `space.new {folder, argv, tab}` | 〃 |
 | 모달 | `mod.json`의 `overlay: {kind: "dialog", width, height}` + `mod.open` (토글), `closeOverlay(props().overlay)` | shipped `picker`, `machine-add` |
 | 드롭다운 | gpui-kit `Popup.new(id, trigger).anchor(...).content(...)` | dialog 안의 `absolute()` 패널은 그려지지 않아 교체 |
-| 단축키 | `keys.json` `global` 섹션 `"cmd-shift-k": "mod.open:session-spotlight"` | 기존 키·shipped 기본값과 충돌 없음 확인, `keys()`로 로드 확인 |
+| 단축키 | `keys.json` `global` 섹션 `"cmd-k": "mod.open:session-spotlight"` | Herdr 키와 충돌 없음, `keys()`로 로드 확인. 처음 정한 `cmd-shift-k`는 Notion 데스크톱 앱의 macOS 전역 단축키에 먼저 잡혀(사용자 확인) 변경 |
 | Tab 키 | `cx.bind_keys([{keystroke:"tab", action, context}])` + 루트 `key_context`/`on_action` | 앱이 Tab을 포커스 이동에 쓰기 때문 |
 | 외부 프로세스 | `exec(cmd, args, {timeout})` (사용자 환경, 셸 없이 인자 배열) | 프로브로 PATH·python3 확인 |
 | Mod 검증 | `herdr-app check <folder>`, `herdr-app status`(errors), `herdr-app shot` | 매 변경마다 실행 |
@@ -82,7 +82,7 @@ UI ↔ 엔진 경계는 JSON 한 객체입니다. 하이라이트는 `[text, mat
 
 ### 증분 인덱싱
 
-`(size, mtime)` 동일 → 건너뜀 · 커짐 → 저장된 오프셋부터 파싱(미완성 마지막 줄은 다음 번으로) · 줄어듦/세션 ID 변경 → 그 세션만 다시 읽음 · 파일 삭제 → 세션 제거 · 제외 경로/옵션 변경 → 설정 해시가 달라져 전체 재구축 · 스키마 버전 변경 → 테이블 재생성. `flock`으로 인덱서는 하나만 실행됩니다.
+`(size, mtime)` 동일 → 건너뜀 · **커졌고**, 같은 inode이며, 이미 읽은 부분의 앞 4KiB와 오프셋 직전 256바이트 해시가 그대로이고, 그 파일이 세션의 소유자일 때만 → 저장된 오프셋부터 파싱(미완성 마지막 줄은 다음 번으로) · 그 밖의 변경(같은 크기 재작성, 교체, 잘림, 세션 ID 변경) → 그 세션만 처음부터 다시 읽음 · 파일 삭제 → **그 파일이 소유한** 세션만 제거하고, 같은 세션의 다른 사본(예: `archived_sessions`)이 있으면 대신 읽음 · 제외 경로/옵션 변경 → 설정 해시가 달라져 전체 재구축 · 스키마 버전 변경 → 테이블 재생성. `flock`으로 인덱서는 하나만 실행되고, `reset`도 같은 잠금을 잡은 채 지웁니다.
 
 ### 검색과 점수
 
