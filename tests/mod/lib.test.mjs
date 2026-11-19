@@ -6,19 +6,21 @@ import * as L from "../../session-spotlight/mods/session-spotlight/lib.js";
 const at = (y, m, d, h = 0, min = 0) => new Date(y, m - 1, d, h, min).getTime() / 1000;
 const NOW = new Date(2026, 10, 19, 15, 0).getTime();
 
-test("formatWhen: today, yesterday, this year, older", () => {
-  assert.equal(L.formatWhen(at(2026, 11, 19, 14, 32), NOW), "오늘 14:32");
-  assert.equal(L.formatWhen(at(2026, 11, 18, 9, 5), NOW), "어제 09:05");
-  assert.equal(L.formatWhen(at(2026, 11, 3, 8, 0), NOW), "11월 3일 08:00");
-  assert.equal(L.formatWhen(at(2025, 9, 17), NOW), "2025. 9. 17.");
+test("formatWhen: today, yesterday, this year, older (English by default)", () => {
+  assert.equal(L.language(), "en");
+  assert.equal(L.formatWhen(at(2026, 11, 19, 14, 32), NOW), "Today 14:32");
+  assert.equal(L.formatWhen(at(2026, 11, 18, 9, 5), NOW), "Yesterday 09:05");
+  assert.equal(L.formatWhen(at(2026, 11, 3, 8, 0), NOW), "Nov 3, 08:00");
+  assert.equal(L.formatWhen(at(2025, 9, 17), NOW), "Sep 17, 2025");
+  assert.equal(L.formatFull(at(2026, 11, 19, 14, 32)), "Nov 19, 2026 14:32");
   assert.equal(L.formatWhen(0, NOW), "");
 });
 
 test("formatRelative", () => {
-  assert.equal(L.formatRelative(NOW / 1000 - 20, NOW), "방금");
-  assert.equal(L.formatRelative(NOW / 1000 - 600, NOW), "10분 전");
-  assert.equal(L.formatRelative(NOW / 1000 - 7200, NOW), "2시간 전");
-  assert.equal(L.formatRelative(NOW / 1000 - 3 * 86400, NOW), "3일 전");
+  assert.equal(L.formatRelative(NOW / 1000 - 20, NOW), "just now");
+  assert.equal(L.formatRelative(NOW / 1000 - 600, NOW), "10 min ago");
+  assert.equal(L.formatRelative(NOW / 1000 - 7200, NOW), "2 h ago");
+  assert.equal(L.formatRelative(NOW / 1000 - 3 * 86400, NOW), "3 d ago");
 });
 
 test("searchArgs carries only non-default filters", () => {
@@ -30,7 +32,10 @@ test("searchArgs carries only non-default filters", () => {
 });
 
 test("chip labels follow filters and typed operators", () => {
-  assert.equal(L.chipLabel("date", L.DEFAULT_FILTERS, {}), "전체 기간");
+  assert.equal(L.chipLabel("date", L.DEFAULT_FILTERS, {}), "Any time");
+  assert.equal(L.chipLabel("project", L.DEFAULT_FILTERS, {}), "All projects");
+  assert.equal(L.chipLabel("sort", L.DEFAULT_FILTERS, {}), "Sort");
+  assert.equal(L.chipLabel("status", { status: "running" }, {}), "Open");
   assert.equal(L.chipLabel("agent", { agent: "codex" }, {}), "Codex");
   assert.equal(L.chipLabel("agent", L.DEFAULT_FILTERS, { agent: "claude" }), "Claude");
   assert.equal(L.chipLabel("project", L.DEFAULT_FILTERS, { project: "acme-web" }), "acme-web");
@@ -140,7 +145,8 @@ test("decideOpen: holder that can't be focused, sub-agent, gone terminal, not re
   assert.deepEqual(L.decideOpen({ ...r, agent: "codex" }, ok([{ address: "t9", agent: "codex", session_id: "S" }]), world).steps, [["agent.focus", { terminal: "t9" }]]);
   assert.equal(L.decideOpen({ kind: "live", running: { address: "t404" } }, ok([]), world).kind, "blocked");
   assert.equal(L.decideOpen({ kind: "live", running: { address: "t9" } }, ok([]), world).kind, "focus");
-  assert.equal(L.decideOpen({ ...r, resumable: false, why_not: "없음" }, ok([]), world).message, "없음");
+  assert.equal(L.decideOpen({ ...r, resumable: false, why_not: "engine text" }, ok([]), world).message, "engine text");
+  assert.equal(L.decideOpen({ ...r, resumable: false, why_not_code: "missing_cwd", why_not_detail: "/w/x" }, ok([]), world).message, "The working folder is gone: /w/x");
   assert.equal(L.decideOpen(null, ok([]), world).kind, "blocked");
 });
 
@@ -212,10 +218,35 @@ test("a sub-agent is placed in its parent's tab, not where its labels point", ()
 });
 
 test("status labels follow Herdr's agent status; idle doesn't read as running", () => {
-  assert.deepEqual(L.statusLabel("working"), { label: "작업 중", tone: "working", spin: true });
-  assert.equal(L.statusLabel("blocked").label, "입력 대기");
-  assert.equal(L.statusLabel("done").label, "완료");
-  for (const s of ["idle", "", null, undefined]) assert.deepEqual(L.statusLabel(s), { label: "대기 중", tone: "idle" });
+  assert.deepEqual(L.statusLabel("working"), { label: "Working", tone: "working", spin: true });
+  assert.equal(L.statusLabel("blocked").label, "Needs input");
+  assert.equal(L.statusLabel("done").label, "Done");
+  for (const s of ["idle", "", null, undefined]) assert.deepEqual(L.statusLabel(s), { label: "Idle", tone: "idle" });
   const items = L.listItems([{ key: "a", running: { address: "t1" } }], { query: "", sort: "auto" });
-  assert.equal(items[0].label, "열린 세션");
+  assert.equal(items[0].label, "Open sessions");
+});
+
+test("Korean is one setting away, and missing keys fall back to English", async () => {
+  const I = await import("../../session-spotlight/mods/session-spotlight/i18n.js");
+  assert.equal(L.setLanguage("ko"), "ko");
+  try {
+    assert.equal(L.formatWhen(at(2026, 11, 19, 14, 32), NOW), "오늘 14:32");
+    assert.equal(L.formatWhen(at(2026, 11, 3, 8, 0), NOW), "11월 3일 08:00");
+    assert.equal(L.formatWhen(at(2025, 9, 17), NOW), "2025. 9. 17.");
+    assert.equal(L.formatRelative(NOW / 1000 - 600, NOW), "10분 전");
+    assert.equal(L.chipLabel("date", L.DEFAULT_FILTERS, {}), "전체 기간");
+    assert.equal(L.statusLabel("idle").label, "대기 중");
+    assert.equal(L.menuOptions("sort")[0].label, "자동");
+    assert.equal(L.whyNot({ why_not_code: "archived" }), "Codex에서 보관(archive)된 세션입니다. Codex에서 보관을 해제한 뒤 재개하세요");
+    assert.equal(L.reason("not_found", null, "x"), "이 세션은 인덱스에 없습니다. 기록이 삭제되었을 수 있습니다.");
+  } finally {
+    L.setLanguage("en");
+  }
+  // Every Korean key exists in English (the base), and the reverse.
+  assert.deepEqual(Object.keys(I.STRINGS.ko).sort(), Object.keys(I.STRINGS.en).sort());
+  assert.equal(L.setLanguage("fr"), "en");
+  assert.equal(L.chooseLanguage("auto", "ko_KR"), "ko");
+  assert.equal(L.chooseLanguage("auto", "de_DE"), "en");
+  assert.equal(L.chooseLanguage(undefined, "ko_KR"), "en");
+  assert.equal(L.chooseLanguage("KO", ""), "ko");
 });

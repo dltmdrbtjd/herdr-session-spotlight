@@ -11,7 +11,7 @@ import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, v_virtual_list, VirtualListScrollHandle, ScrollHandle, Popup } from "gpui-base";
 import {
   exec, run, notify, theme, props, closeOverlay, settings, spaces, panes, agents, terminals,
-  knownAgents, appHome, checking, nextCommand,
+  knownAgents, appHome, home, readTextFile, checking, nextCommand,
 } from "herdr";
 import * as L from "./lib.js";
 
@@ -26,7 +26,7 @@ const FILTERS_H = 40;
 const FOOTER_H = 34;
 
 // Shared by every copy of this build, so the next open paints the last answer at once.
-const cache = { results: null, facets: null, total: 0, resolved: {}, index: null, resumedAt: {} };
+const cache = { results: null, facets: null, total: 0, resolved: {}, index: null, resumedAt: {}, language: null };
 
 function tint(color, alpha) {
   return typeof color === "string" && color.length === 7 ? color + alpha : color;
@@ -65,7 +65,9 @@ export default class SessionSpotlight extends View {
     this.listScroll = VirtualListScrollHandle.new();
     this.previewScroll = ScrollHandle.new();
     this.handle = cx.focus_handle();
-    this.input = InputState.new({ placeholder: "세션 제목, 대화 내용, 프로젝트로 검색…" });
+    if (cache.language) L.setLanguage(cache.language);
+    // The placeholder is drawn by render (see header), so it follows the language setting.
+    this.input = InputState.new({ placeholder: "" });
     this.input.on("change", (_e, cx) => this.onQuery(cx));
     this.input.on("submit", (_e, cx) => this.onSubmit(cx));
     this.input.focus();
@@ -75,6 +77,7 @@ export default class SessionSpotlight extends View {
       { keystroke: "shift-tab", action: PREV_FILTER, context: CONTEXT },
     ]);
     if (checking()) return;
+    this.loadLanguage(cx);
     this.refreshLive(cx, true);
     this.runIndex(cx);
     // Herdr's terminals change while the dialog is open (an agent starts or ends).
@@ -89,6 +92,31 @@ export default class SessionSpotlight extends View {
     });
   }
 
+  // -- language ---------------------------------------------------------------
+
+  // ~/.config/herdr-session-spotlight/config.json: "language": "en" (default) | "ko" | "auto".
+  loadLanguage(cx) {
+    cx.spawn(async (cx) => {
+      let configured = "en";
+      try {
+        const text = await readTextFile(`${home()}/.config/herdr-session-spotlight/config.json`);
+        if (text) configured = JSON.parse(text).language ?? "en";
+      } catch {}
+      let locale = "";
+      if (String(configured).toLowerCase() === "auto") {
+        try {
+          locale = (await exec("defaults", ["read", "-g", "AppleLocale"], { timeout: 3000 })).stdout.trim();
+        } catch {}
+      }
+      const lang = L.chooseLanguage(configured, locale);
+      if (lang !== L.language()) {
+        L.setLanguage(lang);
+        cx.notify();
+      }
+      cache.language = lang;
+    });
+  }
+
   // -- engine ---------------------------------------------------------------
 
   async call(args, timeout = 20000) {
@@ -100,7 +128,7 @@ export default class SessionSpotlight extends View {
     } catch {}
     if (!data) {
       const why = (r.stderr || r.stdout || `exit ${r.code}`).trim().split("\n").filter(Boolean).pop();
-      throw new Error(why || "검색 엔진이 응답하지 않았습니다");
+      throw new Error(why || L.t("engine_no_answer"));
     }
     return data;
   }
@@ -126,7 +154,7 @@ export default class SessionSpotlight extends View {
         cache.resolved = map;
       } catch (e) {
         if (seq !== this.resolveSeq) return;
-        this.error = `실행 중 세션 확인 실패: ${e?.message ?? e}`;
+        this.error = L.t("resolve_failed", { error: e?.message ?? e });
       }
       this.search(cx);
     });
@@ -147,7 +175,7 @@ export default class SessionSpotlight extends View {
           }
         }
       } catch (e) {
-        this.error = `인덱싱 실패: ${e?.message ?? e}`;
+        this.error = L.t("index_failed", { error: e?.message ?? e });
       }
       this.indexing = false;
       cx.notify();
@@ -170,7 +198,7 @@ export default class SessionSpotlight extends View {
       this.pending--;
       if (seq !== this.seq) return cx.notify(); // a newer search is on its way
       if (err || !data?.ok) {
-        this.error = err ? `${err.message ?? err}` : data?.message || "검색 실패";
+        this.error = err ? `${err.message ?? err}` : data?.message || L.t("search_failed");
         return cx.notify();
       }
       this.error = null;
@@ -386,7 +414,7 @@ export default class SessionSpotlight extends View {
         for (const [name, args] of plan.steps) run(name, args);
         this.resuming = null;
         if (!r.running || r.running.address !== plan.address) {
-          notify({ title: "Session Spotlight", body: `이 세션은 ${plan.address}에 열려 있어 그 터미널로 이동했습니다.`, level: "info" });
+          notify({ title: "Session Spotlight", body: L.t("moved_to_holder", { address: plan.address }), level: "info" });
         }
         return this.close();
       }
@@ -405,21 +433,21 @@ export default class SessionSpotlight extends View {
     // A session started a moment ago may not have written its pid file yet: don't start it twice.
     const recent = cache.resumedAt[r.key];
     if (recent && Date.now() - recent < 15000) {
-      return this.fail("방금 이 세션의 재개를 시작했습니다. 잠시 후 다시 시도하세요.", cx);
+      return this.fail(L.t("just_resumed"), cx);
     }
     let check;
     try {
       check = await this.call(["check", `--key=${r.key}`], 10000);
     } catch (e) {
-      return this.fail(`세션 확인 실패: ${e?.message ?? e}`, cx);
+      return this.fail(L.t("check_failed", { error: e?.message ?? e }), cx);
     }
     if (!check.ok) {
       this.runIndex(cx); // the history file is gone: let the index catch up
-      return this.fail(check.message || "세션을 찾을 수 없습니다", cx);
+      return this.fail(L.reason(check.error, null, check.message) || L.t("err_not_found"), cx);
     }
     if (!check.resumable) {
       if (!check.source_exists) this.runIndex(cx); // gone from disk: drop it from the list too
-      return this.fail(check.why_not || "이 세션은 재개할 수 없습니다", cx);
+      return this.fail(L.whyNot(check) || L.t("open_cannot_resume"), cx);
     }
     let known = [];
     try {
@@ -428,7 +456,7 @@ export default class SessionSpotlight extends View {
     const argv = L.resumeArgv({ ...r, resume_args: check.resume_args }, known);
     // Terminals that appeared or changed while this was checking weren't part of the answer.
     if (L.liveFingerprint(L.liveTerminals(this.world())) !== fingerprint) {
-      return this.fail("확인하는 동안 실행 중인 터미널이 바뀌어 재개를 멈췄습니다. 다시 Enter를 누르세요.", cx);
+      return this.fail(L.t("terminals_changed"), cx);
     }
     const space = L.resumeSpace(r, this.world());
     const name = L.tabName(r);
@@ -437,7 +465,7 @@ export default class SessionSpotlight extends View {
     else run("space.new", { folder: check.cwd, argv, ...(name ? { tab: name } : {}) });
     this.resuming = null;
     this.close();
-    notify({ title: "세션 재개", body: `${r.title}\n${argv.join(" ")}`, level: "success", timeout: 5000 });
+    notify({ title: L.t("resumed_title"), body: `${r.title}\n${argv.join(" ")}`, level: "success", timeout: 5000 });
   }
 
   // -- drawing ----------------------------------------------------------------
@@ -492,12 +520,12 @@ export default class SessionSpotlight extends View {
                 : div().truncate().font_weight(selected ? 600 : 500).child(r.title),
             ))
             .when(Boolean(r.running), (el) => el.child(this.statusPill(r.running.status, t)))
-            .when(!r.running && r.archived, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child("보관됨"))),
+            .when(!r.running && r.archived, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(L.t("archived")))),
         )
         .child(h_flex().pl(30).min_w(0).text_size(12).text_color(t.dim).child(div().truncate().child(meta)))
         .when(snippet, (el) =>
           el.child(h_flex().pl(30).min_w(0).text_size(12).text_color(t.muted)
-            .child(div().flex_none().text_color(t.dim).pr(6).child(r.snippet.role === "user" ? "나" : "답"))
+            .child(div().flex_none().text_color(t.dim).pr(6).child(r.snippet.role === "user" ? L.t("snippet_you") : L.t("snippet_agent")))
             .child(this.segs(r.snippet.segments, t.muted, t.accent)))),
     );
   }
@@ -538,7 +566,7 @@ export default class SessionSpotlight extends View {
         el.child(div().id("chip-reset").px(8).h(26).flex().items_center().rounded(7).text_size(11.5).text_color(t.dim).cursor_pointer()
           .hover((s) => s.bg(t.hover).text_color(t.foreground))
           .on_click((_e, cx) => this.resetFilters(cx))
-          .child("필터 초기화")));
+          .child(L.t("clear_filters"))));
   }
 
   menuPanel(t, kind) {
@@ -590,7 +618,7 @@ export default class SessionSpotlight extends View {
   previewPane(t, r, height, nowMs) {
     const pane = v_flex().flex_1().min_w(0).h(height).px(20).py(16).gap(14).overflow_hidden();
     if (!r) {
-      return pane.items_center().justify_center().child(div().text_color(t.dim).text_size(12.5).child("세션을 선택하면 여기에 미리보기가 표시됩니다"));
+      return pane.items_center().justify_center().child(div().text_color(t.dim).text_size(12.5).child(L.t("preview_empty")));
     }
     const p = this.preview && this.preview.key === r.key ? this.preview : null;
     const metaRow = (label, value, mono) =>
@@ -601,16 +629,16 @@ export default class SessionSpotlight extends View {
 
     let action;
     if (r.running) {
-      action = { icon: "arrow-up-right", color: t.accent, text: `↵  열려 있는 터미널로 이동 · ${where} (${r.running.address})` };
+      action = { icon: "arrow-up-right", color: t.accent, text: L.t("action_focus", { where, address: r.running.address }) };
     } else if (r.kind === "live") {
-      action = { icon: "terminal", color: t.dim, text: "터미널이 종료되었습니다" };
+      action = { icon: "terminal", color: t.dim, text: L.t("action_gone") };
     } else if (r.resumable) {
       const cmd = r.agent === "claude" ? `claude --resume ${r.session_id.slice(0, 8)}…` : `codex resume ${r.session_id.slice(0, 8)}…`;
-      action = { icon: "history", color: t.accent, text: `↵  새 탭에서 재개 · ${cmd}` };
+      action = { icon: "history", color: t.accent, text: L.t("action_resume", { command: cmd }) };
     } else {
-      action = { icon: "status", color: t.blocked, text: `재개할 수 없음 · ${r.why_not}` };
+      action = { icon: "status", color: t.blocked, text: L.t("action_blocked", { why: L.whyNot(r) }) };
     }
-    if (this.resuming === r.key) action = { icon: "spinner", color: t.accent, text: "재개 준비 중…", spin: true };
+    if (this.resuming === r.key) action = { icon: "spinner", color: t.accent, text: L.t("action_preparing"), spin: true };
 
     pane
       .child(
@@ -621,19 +649,19 @@ export default class SessionSpotlight extends View {
               .child(div().text_size(15.5).line_height("22px").max_h(44).overflow_hidden().font_semibold().text_color(t.foreground).child(r.title))
               .child(h_flex().gap(8).items_center().text_size(12).text_color(t.dim)
                 .when(Boolean(r.running), (el) => el.child(this.statusPill(r.running.status, t)))
-                .when(!r.running, (el) => el.child(div().child(r.kind === "live" ? "종료됨" : "종료됨")))
+                .when(!r.running, (el) => el.child(div().child(L.t("ended"))))
                 .child(div().child("·")).child(div().child(r.agent_name))),
           ),
       )
       .child(
         v_flex().gap(5).flex_none()
-          .child(metaRow(r.running ? "Space" : "프로젝트", where))
-          .child(metaRow("디렉터리", r.cwd ? r.cwd.replace(/^\/Users\/[^/]+/, "~") : "", true))
-          .when(Boolean(r.branch), (el) => el.child(metaRow("브랜치", r.branch, true)))
-          .child(metaRow("시작", L.formatFull(r.created_at)))
-          .child(metaRow("마지막 활동", `${L.formatFull(r.updated_at)}  (${L.formatRelative(r.updated_at, nowMs)})`))
-          .when(r.kind !== "live", (el) => el.child(metaRow("메시지", `${r.messages}개`)))
-          .when(Boolean(r.session_id), (el) => el.child(metaRow("세션 ID", r.session_id, true))),
+          .child(metaRow(r.running ? L.t("meta_space") : L.t("meta_project"), where))
+          .child(metaRow(L.t("meta_folder"), r.cwd ? r.cwd.replace(/^\/Users\/[^/]+/, "~") : "", true))
+          .when(Boolean(r.branch), (el) => el.child(metaRow(L.t("meta_branch"), r.branch, true)))
+          .child(metaRow(L.t("meta_started"), L.formatFull(r.created_at)))
+          .child(metaRow(L.t("meta_last_active"), `${L.formatFull(r.updated_at)}  (${L.formatRelative(r.updated_at, nowMs)})`))
+          .when(r.kind !== "live", (el) => el.child(metaRow(L.t("meta_messages"), L.t("meta_messages_count", { n: r.messages }))))
+          .when(Boolean(r.session_id), (el) => el.child(metaRow(L.t("meta_session_id"), r.session_id, true))),
       )
       .child(
         h_flex().flex_none().h(32).px(10).gap(8).items_center().rounded(8).bg(tint(action.color, "14"))
@@ -643,17 +671,17 @@ export default class SessionSpotlight extends View {
 
     if (r.kind === "live") {
       return pane.child(div().text_size(12).text_color(t.dim).child(
-        r.session_id ? "이 세션의 기록이 아직 인덱스에 없습니다. 잠시 후 다시 열면 대화가 표시됩니다." : "Claude Code·Codex가 아닌 에이전트이거나 세션을 확인하지 못했습니다. 터미널로 이동만 할 수 있습니다.",
+        r.session_id ? L.t("live_unindexed") : L.t("live_unknown"),
       ));
     }
     const head = h_flex().flex_none().items_center().gap(8).text_size(11).font_semibold().text_color(t.dim)
-      .child(div().child(this.query.trim() ? "일치한 대화" : "최근 대화"))
+      .child(div().child(this.query.trim() ? L.t("conversation_matched") : L.t("conversation_recent")))
       .when(Boolean(p?.messages?.length), (el) =>
         el.child(div().font_medium().child(`${p.first_index + 1}–${p.first_index + p.messages.length} / ${p.message_count}`)));
     pane.child(div().h(1).flex_none().bg(t.border)).child(head);
-    if (!p || p.loading) return pane.child(h_flex().gap(8).items_center().text_size(12).text_color(t.dim).child(svg(ICON("spinner")).size(12).spin(900)).child("불러오는 중…"));
-    if (!p.ok) return pane.child(div().text_size(12).text_color(t.blocked).child(p.message || "미리보기를 불러오지 못했습니다"));
-    if (!p.messages.length) return pane.child(div().text_size(12).text_color(t.dim).child("인덱싱된 대화가 없습니다"));
+    if (!p || p.loading) return pane.child(h_flex().gap(8).items_center().text_size(12).text_color(t.dim).child(svg(ICON("spinner")).size(12).spin(900)).child(L.t("loading")));
+    if (!p.ok) return pane.child(div().text_size(12).text_color(t.blocked).child(L.reason(p.error, null, p.message) || L.t("preview_failed")));
+    if (!p.messages.length) return pane.child(div().text_size(12).text_color(t.dim).child(L.t("no_messages")));
     return pane.child(
       v_flex().id("spotlight-conversation").flex_1().min_h(0).gap(12).pr(6).overflow_y_scrollbar().track_scroll(this.previewScroll).children(
         p.messages.map((m, i) => {
@@ -665,7 +693,7 @@ export default class SessionSpotlight extends View {
           return v_flex().gap(4).px(10).py(8).rounded(8)
             .when(me, (el) => el.bg(t.hover))
             .when(m.match, (el) => el.border_1().border_color(tint(t.accent, "99")))
-            .child(h_flex().gap(8).items_center().text_size(11).child(div().font_semibold().text_color(me ? t.foreground : t.accent).child(me ? "나" : r.agent_name)).child(div().text_color(t.dim).child(L.formatWhen(m.ts, nowMs))))
+            .child(h_flex().gap(8).items_center().text_size(11).child(div().font_semibold().text_color(me ? t.foreground : t.accent).child(me ? L.t("snippet_you") : r.agent_name)).child(div().text_color(t.dim).child(L.formatWhen(m.ts, nowMs))))
             .child(div().text_size(12.5).child(body));
         }),
       ),
@@ -675,10 +703,10 @@ export default class SessionSpotlight extends View {
   notice(t) {
     const typed = this.query.trim();
     if (this.error && !this.data) return { text: this.error, color: t.blocked };
-    if (!this.data) return { text: "세션을 불러오는 중…", color: t.dim, spin: true };
-    if (this.data.index && !this.data.index.ready) return { text: "처음 실행입니다. 세션 기록을 인덱싱하는 중…", color: t.dim, spin: true };
-    if (typed) return { text: `“${typed}”와 일치하는 세션이 없습니다`, sub: "다른 단어를 쓰거나 필터를 해제해 보세요", color: t.dim };
-    return { text: "조건에 맞는 세션이 없습니다", sub: "필터를 해제해 보세요", color: t.dim };
+    if (!this.data) return { text: L.t("loading_sessions"), color: t.dim, spin: true };
+    if (this.data.index && !this.data.index.ready) return { text: L.t("first_index"), color: t.dim, spin: true };
+    if (typed) return { text: L.t("no_match", { query: typed }), sub: L.t("no_match_hint"), color: t.dim };
+    return { text: L.t("no_sessions"), sub: L.t("no_sessions_hint"), color: t.dim };
   }
 
   render(cx) {
@@ -700,9 +728,9 @@ export default class SessionSpotlight extends View {
     if (this.flash) status = div().max_w(460).truncate().text_color(this.flash.level === "error" ? t.blocked : t.done).child(this.flash.text);
     else if (this.error && this.data) status = div().max_w(460).truncate().text_color(t.blocked).child(this.error);
     else if (this.data) {
-      const parts = [`${this.data.total}개 세션`];
+      const parts = [this.data.total === 1 ? L.t("count_sessions_one") : L.t("count_sessions", { n: this.data.total })];
       if (this.data.took_ms != null) parts.push(`${Math.round(this.data.took_ms)}ms`);
-      if (this.indexing) parts.push("인덱스 갱신 중");
+      if (this.indexing) parts.push(L.t("updating_index"));
       status = div().text_color(t.dim).child(parts.join(" · "));
     } else status = div();
 
@@ -734,7 +762,7 @@ export default class SessionSpotlight extends View {
             .when(Boolean(n.sub), (el) => el.child(div().text_size(12).text_color(t.dim).text_center().child(n.sub)))
             .when(L.FILTER_KINDS.some((k) => L.chipActive(k, this.filters, {})), (el) =>
               el.child(div().id("empty-reset").mt(6).px(10).py(5).rounded(7).bg(t.hover).text_size(12).text_color(t.foreground).cursor_pointer()
-                .on_click((_e, cx) => this.resetFilters(cx)).child("필터 초기화")));
+                .on_click((_e, cx) => this.resetFilters(cx)).child(L.t("clear_filters"))));
         })();
 
     return v_flex()
@@ -783,7 +811,12 @@ export default class SessionSpotlight extends View {
       .child(
         h_flex().h(HEADER_H).flex_none().px(18).gap(12).items_center()
           .child(svg(ICON("search")).size(18).flex_none().text_color(t.dim))
-          .child(Input.new(this.input).flex_1().h_full().text_size(16).text_color(t.foreground))
+          .child(
+            div().relative().flex_1().h_full().min_w(0)
+              .when(!this.query, (el) => el.child(
+                h_flex().absolute().inset_0().items_center().text_size(16).text_color(t.dim).child(div().truncate().child(L.t("placeholder")))))
+              .child(Input.new(this.input).size_full().text_size(16).text_color(t.foreground)),
+          )
           .when(busy, (el) => el.child(svg(ICON("spinner")).size(14).flex_none().text_color(t.dim).spin(900)))
           .child(div().id("spotlight-esc").flex_none().px(6).h(20).flex().items_center().rounded(5).text_size(11).text_color(t.dim).cursor_pointer()
             .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(() => this.close()).child("esc")),
@@ -798,10 +831,10 @@ export default class SessionSpotlight extends View {
       .child(div().h(1).flex_none().bg(t.border))
       .child(
         h_flex().h(FOOTER_H).flex_none().px(16).gap(14).items_center().text_size(11)
-          .child(key("↑↓", "선택"))
-          .child(key("↵", r?.running ? "이동" : r && r.kind !== "live" ? "재개" : "열기"))
-          .child(key("⇥", "필터"))
-          .child(key("esc", "닫기"))
+          .child(key("↑↓", L.t("key_select")))
+          .child(key("↵", r?.running ? L.t("key_go") : r && r.kind !== "live" ? L.t("key_resume") : L.t("key_open")))
+          .child(key("⇥", L.t("key_filters")))
+          .child(key("esc", L.t("key_close")))
           .child(div().flex_1())
           .child(status),
       )

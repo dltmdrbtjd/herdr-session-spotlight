@@ -1,36 +1,45 @@
 // Session Spotlight: pure helpers. Nothing here touches Herdr or gpui-kit, so the
 // node tests in tests/mod exercise exactly what the mod runs.
 
+import { t, dateParams, reason } from "./i18n.js";
+
+export { t, setLanguage, language, chooseLanguage, reason } from "./i18n.js";
+
 export const AGENT_LABEL = { claude: "Claude Code", codex: "Codex" };
 
+// Option labels are looked up when shown (`optionLabel`), so a language change applies at once.
 export const DATE_OPTIONS = [
-  { value: "all", label: "전체 기간" },
-  { value: "today", label: "오늘" },
-  { value: "7d", label: "최근 7일" },
-  { value: "30d", label: "최근 30일" },
-  { value: "custom", label: "사용자 지정…" },
+  { value: "all", key: "date_all" },
+  { value: "today", key: "date_today" },
+  { value: "7d", key: "date_7d" },
+  { value: "30d", key: "date_30d" },
+  { value: "custom", key: "date_custom" },
 ];
 export const AGENT_OPTIONS = [
-  { value: "all", label: "모든 에이전트" },
-  { value: "claude", label: "Claude" },
-  { value: "codex", label: "Codex" },
-  { value: "other", label: "기타" },
+  { value: "all", key: "agent_all" },
+  { value: "claude", text: "Claude" },
+  { value: "codex", text: "Codex" },
+  { value: "other", key: "agent_other" },
 ];
 export const STATUS_OPTIONS = [
-  { value: "all", label: "모든 상태" },
-  { value: "running", label: "열려 있음" },
-  { value: "ended", label: "종료됨" },
+  { value: "all", key: "status_all" },
+  { value: "running", key: "status_open" },
+  { value: "ended", key: "status_ended" },
 ];
 export const SORT_OPTIONS = [
-  { value: "auto", label: "자동", hint: "검색어가 있으면 관련도, 없으면 최근 활동" },
-  { value: "recent", label: "최근 활동순" },
-  { value: "created", label: "생성일순" },
-  { value: "relevance", label: "관련도순" },
-  { value: "oldest", label: "오래된순" },
+  { value: "auto", key: "sort_auto", hintKey: "sort_auto_hint" },
+  { value: "recent", key: "sort_recent" },
+  { value: "created", key: "sort_created" },
+  { value: "relevance", key: "sort_relevance" },
+  { value: "oldest", key: "sort_oldest" },
 ];
 export const FILTER_KINDS = ["date", "project", "agent", "status", "sort"];
 
 export const DEFAULT_FILTERS = Object.freeze({ date: "all", project: null, agent: "all", status: "all", sort: "auto" });
+
+export function optionLabel(o) {
+  return o.text ?? t(o.key);
+}
 
 const pad = (n) => String(n).padStart(2, "0");
 const DAY = 86400000;
@@ -40,33 +49,31 @@ function startOfDay(ms) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
 
-/** "오늘 14:32", "어제 09:10", "11월 3일 14:32", "2025. 9. 17." */
+/** "Today 14:32", "Yesterday 09:10", "Nov 3, 14:32", "Sep 17, 2025" (ko: "오늘 14:32", "11월 3일 14:32", …) */
 export function formatWhen(sec, nowMs = Date.now()) {
   if (!sec) return "";
   const ms = sec * 1000;
-  const d = new Date(ms);
-  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const p = dateParams(new Date(ms));
   const today = startOfDay(nowMs);
-  if (ms >= today) return `오늘 ${hm}`;
-  if (ms >= today - DAY) return `어제 ${hm}`;
-  if (d.getFullYear() === new Date(nowMs).getFullYear()) return `${d.getMonth() + 1}월 ${d.getDate()}일 ${hm}`;
-  return `${d.getFullYear()}. ${d.getMonth() + 1}. ${d.getDate()}.`;
+  if (ms >= today) return t("when_today", p);
+  if (ms >= today - DAY) return t("when_yesterday", p);
+  if (p.year === new Date(nowMs).getFullYear()) return t("when_this_year", p);
+  return t("when_other_year", p);
 }
 
-/** Full date for the preview: "2026. 11. 19. 14:32" */
+/** Full date for the preview: "Nov 19, 2026 14:32" (ko: "2026. 11. 19. 14:32") */
 export function formatFull(sec) {
   if (!sec) return "—";
-  const d = new Date(sec * 1000);
-  return `${d.getFullYear()}. ${d.getMonth() + 1}. ${d.getDate()}. ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return t("when_full", dateParams(new Date(sec * 1000)));
 }
 
 export function formatRelative(sec, nowMs = Date.now()) {
   if (!sec) return "";
   const diff = Math.max(0, nowMs - sec * 1000);
-  if (diff < 60000) return "방금";
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}분 전`;
-  if (diff < DAY) return `${Math.floor(diff / 3600000)}시간 전`;
-  if (diff < 7 * DAY) return `${Math.floor(diff / DAY)}일 전`;
+  if (diff < 60000) return t("rel_now");
+  if (diff < 3600000) return t("rel_min", { n: Math.floor(diff / 60000) });
+  if (diff < DAY) return t("rel_hour", { n: Math.floor(diff / 3600000) });
+  if (diff < 7 * DAY) return t("rel_day", { n: Math.floor(diff / DAY) });
   return formatWhen(sec, nowMs);
 }
 
@@ -92,19 +99,22 @@ export function searchArgs(query, filters, liveJson, limit = 80) {
 /** What a chip says. Operators typed in the field show in the chip they narrow. */
 export function chipLabel(kind, filters, parsed) {
   const f = { ...DEFAULT_FILTERS, ...(filters || {}) };
-  const find = (opts, v) => opts.find((o) => o.value === v)?.label ?? v;
+  const find = (opts, v) => {
+    const o = opts.find((x) => x.value === v);
+    return o ? optionLabel(o) : v;
+  };
   if (kind === "date") {
     if (parsed?.after || parsed?.before) {
       const a = parsed.after ? dateFromSec(parsed.after).slice(5).replace("-", "/") : "";
       const b = parsed.before ? dateFromSec(parsed.before - 1).slice(5).replace("-", "/") : "";
-      return `${a || "…"} – ${b || "오늘"}`;
+      return `${a || "…"} – ${b || t("range_today")}`;
     }
     return find(DATE_OPTIONS, f.date);
   }
-  if (kind === "project") return parsed?.project || f.project || "모든 프로젝트";
+  if (kind === "project") return parsed?.project || f.project || t("project_all");
   if (kind === "agent") return parsed?.agent ? find(AGENT_OPTIONS, parsed.agent) : find(AGENT_OPTIONS, f.agent);
   if (kind === "status") return parsed?.status ? find(STATUS_OPTIONS, parsed.status) : find(STATUS_OPTIONS, f.status);
-  if (kind === "sort") return parsed?.sort ? find(SORT_OPTIONS, parsed.sort) : f.sort === "auto" ? "정렬" : find(SORT_OPTIONS, f.sort);
+  if (kind === "sort") return parsed?.sort ? find(SORT_OPTIONS, parsed.sort) : f.sort === "auto" ? t("sort_chip") : find(SORT_OPTIONS, f.sort);
   return "";
 }
 
@@ -120,13 +130,14 @@ export function chipActive(kind, filters, parsed) {
 
 /** Menu options for a chip. Project options come from the engine's facets. */
 export function menuOptions(kind, facets) {
-  if (kind === "date") return DATE_OPTIONS;
-  if (kind === "agent") return AGENT_OPTIONS;
-  if (kind === "status") return STATUS_OPTIONS;
-  if (kind === "sort") return SORT_OPTIONS;
+  const labelled = (opts) => opts.map((o) => ({ ...o, label: optionLabel(o), hint: o.hintKey ? t(o.hintKey) : undefined }));
+  if (kind === "date") return labelled(DATE_OPTIONS);
+  if (kind === "agent") return labelled(AGENT_OPTIONS);
+  if (kind === "status") return labelled(STATUS_OPTIONS);
+  if (kind === "sort") return labelled(SORT_OPTIONS);
   if (kind === "project") {
     const list = (facets?.projects ?? []).map(([name, count]) => ({ value: name, label: name, count }));
-    return [{ value: null, label: "모든 프로젝트" }, ...list];
+    return [{ value: null, label: t("project_all") }, ...list];
   }
   return [];
 }
@@ -246,10 +257,10 @@ export function liveForSearch(live, resolved) {
  *   tone: the theme color name (working, blocked, done, idle)
  */
 export function statusLabel(status) {
-  if (status === "working") return { label: "작업 중", tone: "working", spin: true };
-  if (status === "blocked") return { label: "입력 대기", tone: "blocked" };
-  if (status === "done") return { label: "완료", tone: "done" };
-  return { label: "대기 중", tone: "idle" };
+  if (status === "working") return { label: t("status_working"), tone: "working", spin: true };
+  if (status === "blocked") return { label: t("status_blocked"), tone: "blocked" };
+  if (status === "done") return { label: t("status_done"), tone: "done" };
+  return { label: t("status_idle"), tone: "idle" };
 }
 
 export const ROW_H = 58;
@@ -268,11 +279,11 @@ export function listItems(results, { query, sort }) {
     const running = results.filter((r) => r.running);
     const rest = results.filter((r) => !r.running);
     if (running.length) {
-      items.push({ kind: "head", key: "h-running", label: "열린 세션", count: running.length });
+      items.push({ kind: "head", key: "h-running", label: t("section_open"), count: running.length });
       running.forEach((r) => items.push({ kind: "row", key: r.key, r }));
     }
     if (rest.length) {
-      items.push({ kind: "head", key: "h-recent", label: "최근 세션", count: rest.length });
+      items.push({ kind: "head", key: "h-recent", label: t("section_recent"), count: rest.length });
       rest.forEach((r) => items.push({ kind: "row", key: r.key, r }));
     }
     return items;
@@ -321,35 +332,35 @@ export function wrapWords(segments, limit = 400) {
  * the holder can't be focused: a duplicate of a running session is worse than a refusal.
  */
 export function decideOpen(r, resolved, world, asked = null) {
-  if (!r) return { kind: "blocked", message: "선택된 세션이 없습니다" };
+  if (!r) return { kind: "blocked", message: t("open_no_selection") };
   if (!resolved || resolved.ok === false || !Array.isArray(resolved.terminals)) {
-    return { kind: "blocked", message: `실행 중인 세션을 확인하지 못해 아무것도 열지 않았습니다${resolved?.message ? `: ${resolved.message}` : ""}` };
+    return { kind: "blocked", message: t("open_resolve_failed", { reason: resolved?.message ? `: ${resolved.message}` : "" }) };
   }
   const list = resolved.terminals;
   // Every terminal that was asked about must be in the answer; a gap is an unknown.
   const missing = (asked ?? []).filter((a) => !list.some((t) => t.address === a));
   if (missing.length) {
-    return { kind: "blocked", message: `터미널(${missing.join(", ")})을 확인하지 못해 아무것도 열지 않았습니다` };
+    return { kind: "blocked", message: t("open_missing", { list: missing.join(", ") }) };
   }
   if (r.kind === "live" && !r.session_id) {
     // An agent Spotlight can't identify (not Claude/Codex): its terminal, if an agent still runs there.
     const address = r.running?.address;
     const still = address && liveTerminals(world).some((t) => t.address === address);
-    return still ? planFocus(address, world) : { kind: "blocked", message: "이 터미널의 에이전트는 더 이상 실행 중이 아닙니다" };
+    return still ? planFocus(address, world) : { kind: "blocked", message: t("open_agent_gone") };
   }
   const holder = list.find((t) => t.agent === r.agent && t.session_id && t.session_id === r.session_id);
   if (holder) {
     const plan = planFocus(holder.address, world);
     if (plan.kind === "focus") return plan;
-    return { kind: "blocked", message: `이 세션은 ${holder.address}에서 실행 중이지만 그 터미널로 이동할 수 없습니다` };
+    return { kind: "blocked", message: t("open_holder_unfocusable", { address: holder.address }) };
   }
-  if (r.kind === "live") return { kind: "blocked", message: "이 터미널은 더 이상 이 세션을 실행하지 않습니다" };
+  if (r.kind === "live") return { kind: "blocked", message: t("open_live_moved_on") };
   const unknown = list.filter((t) => t.agent === r.agent && !t.session_id).map((t) => t.address);
   if (unknown.length) {
     const who = AGENT_LABEL[r.agent] ?? r.agent;
-    return { kind: "blocked", message: `세션을 확인하지 못한 ${who} 터미널(${unknown.join(", ")})이 있어, 중복 실행을 막으려고 재개하지 않았습니다` };
+    return { kind: "blocked", message: t("open_unknown_terminals", { agent: who, list: unknown.join(", ") }) };
   }
-  if (!r.resumable) return { kind: "blocked", message: r.why_not || "이 세션은 재개할 수 없습니다" };
+  if (!r.resumable) return { kind: "blocked", message: whyNot(r) || t("open_cannot_resume") };
   return { kind: "resume" };
 }
 
@@ -369,7 +380,7 @@ export function planFocus(address, world) {
   if ((world.terminals ?? []).some((t) => t.address === address && t.state === "live")) {
     return { kind: "focus", address, steps: [["terminal.peek", { terminal: address }]] };
   }
-  return { kind: "blocked", message: `터미널 ${address}이(가) 더 이상 실행 중이 아닙니다` };
+  return { kind: "blocked", message: t("open_terminal_gone", { address }) };
 }
 
 /** The space a resumed session opens in: where it last ran, else one on its folder. */
@@ -416,4 +427,9 @@ export function fromHex(hex) {
     i += n;
   }
   return out;
+}
+
+/** Why a session can't be resumed, in the current language (the engine sends a code). */
+export function whyNot(r) {
+  return reason(r?.why_not_code, r?.why_not_detail, r?.why_not);
 }
