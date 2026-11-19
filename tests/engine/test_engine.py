@@ -572,7 +572,9 @@ class SearchTests(Env):
             shutil.rmtree(self.work / "acme-web")
             c = search.check(conn, key)
             self.assertFalse(c["resumable"])
-            self.assertIn("작업 디렉터리", c["why_not"])
+            self.assertEqual(c["why_not_code"], "missing_cwd")
+            self.assertIn("working folder is gone", c["why_not"])
+            self.assertTrue(c["why_not_detail"].endswith("acme-web"))
             self.assertFalse(search.check(conn, "local|claude|gone")["ok"])
         finally:
             conn.close()

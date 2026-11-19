@@ -93,7 +93,7 @@ def cmd_preview(args) -> int:
 
     conn = _readonly()
     if conn is None:
-        return emit({"ok": False, "error": "no_index", "message": "인덱스가 아직 없습니다."})
+        return emit({"ok": False, "error": "no_index", "message": "There is no index yet."})
     try:
         return emit(preview(conn, args.key, args.query or "", args.message))
     finally:
@@ -105,7 +105,7 @@ def cmd_check(args) -> int:
 
     conn = _readonly()
     if conn is None:
-        return emit({"ok": False, "error": "no_index", "message": "인덱스가 아직 없습니다."})
+        return emit({"ok": False, "error": "no_index", "message": "There is no index yet."})
     try:
         return emit(check(conn, args.key))
     finally:

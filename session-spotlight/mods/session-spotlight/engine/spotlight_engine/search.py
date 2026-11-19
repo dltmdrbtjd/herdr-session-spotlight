@@ -470,23 +470,42 @@ def run_search(
     }
 
 
-def resume_info(s: dict) -> Tuple[bool, str]:
+# Why a session can't be resumed: (code, English text). The mod shows its own translation of the code.
+WHY_NOT = {
+    "unknown_agent": "No resume command is known for this agent",
+    "subagent": "A sub-agent transcript can't be resumed on its own",
+    "archived": "Archived in Codex. Unarchive it in Codex, then resume.",
+    "no_cwd": "No working folder is recorded, so it can't be resumed",
+    "missing_cwd": "The working folder is gone: {detail}",
+    "history_deleted": "The session's history file was deleted",
+}
+NOT_FOUND = "This session isn't in the index anymore. Its history may have been deleted."
+
+
+def resume_info(s: dict) -> Tuple[bool, str, str]:
+    """(resumable, code, detail). code is "" when it can be resumed."""
     if s.get("kind") == "live":
-        return False, ""
+        return False, "", ""
     if s["agent"] not in AGENTS:
-        return False, "이 에이전트는 재개 명령을 알 수 없습니다"
+        return False, "unknown_agent", ""
     if s.get("is_subagent"):
-        return False, "하위 에이전트 기록은 단독으로 재개할 수 없습니다"
+        return False, "subagent", ""
     if s.get("archived"):
-        return False, "Codex에서 보관(archive)된 세션입니다. Codex에서 보관을 해제한 뒤 재개하세요"
+        return False, "archived", ""
     cwd = s.get("cwd") or ""
     if not cwd:
-        return False, "작업 디렉터리 정보가 없어 재개할 수 없습니다"
+        return False, "no_cwd", ""
     if not os.path.isdir(cwd):
-        return False, f"작업 디렉터리가 없습니다: {cwd}"
+        return False, "missing_cwd", cwd
     if s.get("source_path") and not os.path.exists(s["source_path"]):
-        return False, "세션 기록 파일이 삭제되었습니다"
-    return True, ""
+        return False, "history_deleted", ""
+    return True, "", ""
+
+
+def why_not_fields(s: dict) -> dict:
+    resumable, code, detail = resume_info(s)
+    text = WHY_NOT.get(code, "").replace("{detail}", detail)
+    return {"resumable": resumable, "why_not": text, "why_not_code": code, "why_not_detail": detail}
 
 
 def resume_args(s: dict) -> List[str]:
@@ -498,7 +517,7 @@ def resume_args(s: dict) -> List[str]:
 
 
 def decorate(s: dict, terms: Sequence[str], searcher: Searcher, msg_hits: Dict[str, Dict[str, Hit]]) -> dict:
-    title = s.get("title") or (s.get("first_prompt") or "")[:80] or s.get("session_id") or "(제목 없음)"
+    title = s.get("title") or (s.get("first_prompt") or "")[:80] or s.get("session_id") or "(untitled)"
     snippet_segs = None
     snippet_role = None
     snippet_id = None
@@ -513,7 +532,7 @@ def decorate(s: dict, terms: Sequence[str], searcher: Searcher, msg_hits: Dict[s
                 snippet_role = row["role"]
                 snippet_id = row["id"]
         match = "title" if in_title else ("body" if snippet_segs else "meta")
-    resumable, why_not = resume_info(s)
+    why = why_not_fields(s)
     running = s.get("running")
     return {
         "key": s["key"],
@@ -539,9 +558,8 @@ def decorate(s: dict, terms: Sequence[str], searcher: Searcher, msg_hits: Dict[s
         "title_has_all": bool(terms) and all(t in fold(title) for t in terms),
         "snippet": {"segments": snippet_segs, "role": snippet_role, "message_id": snippet_id} if snippet_segs else None,
         "score": s.get("score", 0.0),
-        "resumable": resumable,
-        "why_not": why_not,
-        "resume_args": resume_args(s) if resumable else [],
+        **why,
+        "resume_args": resume_args(s) if why["resumable"] else [],
     }
 
 
@@ -549,7 +567,7 @@ def preview(conn: sqlite3.Connection, key: str, text: str = "", message_id: Opti
     q = parse_query(text)
     row = conn.execute("SELECT * FROM sessions WHERE key=?", (key,)).fetchone()
     if row is None:
-        return {"ok": False, "error": "not_found", "message": "이 세션은 인덱스에 없습니다. 기록이 삭제되었을 수 있습니다."}
+        return {"ok": False, "error": "not_found", "message": NOT_FOUND}
     s = dict(row)
     searcher = Searcher(conn)
     focus_id = message_id
@@ -575,7 +593,7 @@ def preview(conn: sqlite3.Connection, key: str, text: str = "", message_id: Opti
                 "segments": highlight(body, q.terms) if q.terms else [[body, False]],
                 "match": m["id"] == focus_id,
             })
-    resumable, why_not = resume_info(s)
+    why = why_not_fields(s)
     return {
         "ok": True,
         "key": key,
@@ -592,20 +610,19 @@ def preview(conn: sqlite3.Connection, key: str, text: str = "", message_id: Opti
         "messages": messages,
         "focus_id": focus_id,
         "source_path": s["source_path"],
-        "resumable": resumable,
-        "why_not": why_not,
-        "resume_args": resume_args(s) if resumable else [],
+        **why,
+        "resume_args": resume_args(s) if why["resumable"] else [],
     }
 
 
 def check(conn: sqlite3.Connection, key: str) -> dict:
     row = conn.execute("SELECT * FROM sessions WHERE key=?", (key,)).fetchone()
     if row is None:
-        return {"ok": False, "error": "not_found", "message": "이 세션은 인덱스에 없습니다. 기록이 삭제되었을 수 있습니다."}
+        return {"ok": False, "error": "not_found", "message": NOT_FOUND}
     s = dict(row)
-    resumable, why_not = resume_info(s)
+    why = why_not_fields(s)
     return {
         "ok": True, "key": key, "agent": s["agent"], "session_id": s["session_id"], "cwd": s["cwd"],
         "source_exists": os.path.exists(s["source_path"]), "cwd_exists": bool(s["cwd"]) and os.path.isdir(s["cwd"]),
-        "resumable": resumable, "why_not": why_not, "resume_args": resume_args(s) if resumable else [],
+        **why, "resume_args": resume_args(s) if why["resumable"] else [],
     }

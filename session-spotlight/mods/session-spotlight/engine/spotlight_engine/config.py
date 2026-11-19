@@ -34,6 +34,8 @@ DEFAULTS = {
     # Override the agents' history folders (defaults follow CLAUDE_CONFIG_DIR / CODEX_HOME).
     "claude_home": None,
     "codex_home": None,
+    # The mod's UI language: "en" (default), "ko", or "auto" (the system's, English otherwise).
+    "language": "en",
 }
 
 
@@ -73,6 +75,7 @@ class Config:
         self.max_message_chars: int = 6000
         self.claude_home: Optional[str] = None
         self.codex_home: Optional[str] = None
+        self.language: str = "en"
         self.errors: List[str] = []
 
     @property
