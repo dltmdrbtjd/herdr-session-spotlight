@@ -1,5 +1,5 @@
 // Session Spotlight: one search box over every Claude Code and Codex session on
-// this computer, running or ended. Cmd+Shift+K opens it as a centered dialog.
+// this computer, running or ended. Cmd+K opens it as a centered dialog.
 // Type to search titles, conversations, projects and folders; ↑/↓ choose,
 // Enter goes to the terminal that runs the session (by its exact address) or
 // resumes an ended one in its own folder; Tab walks the filter chips; Esc closes.

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Installs Session Spotlight into the Herdr app on this computer.
-#   scripts/install.sh [--key cmd-shift-k] [--no-key]
+#   scripts/install.sh [--key cmd-k] [--no-key]
 # - copies session-spotlight/mods/session-spotlight to ~/.config/herdr-app/mods/
 #   (refuses to replace a folder of that name that it didn't install)
 # - adds one shortcut to keys.json (backed up first; refuses to take a key in use)
@@ -9,7 +9,7 @@ set -eu
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 APP="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
 DEST="$APP/mods/session-spotlight"
-KEY=cmd-shift-k
+KEY=cmd-k
 ADD_KEY=1
 while [ $# -gt 0 ]; do
   case "$1" in
