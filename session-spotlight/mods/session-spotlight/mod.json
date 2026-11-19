@@ -1,0 +1,5 @@
+{
+  "place": "none",
+  "title": "Session Spotlight",
+  "overlay": { "kind": "dialog", "width": 920, "height": 640 }
+}
