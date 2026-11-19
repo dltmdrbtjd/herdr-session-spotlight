@@ -70,7 +70,7 @@ def main():
         cwd.mkdir(parents=True, exist_ok=True)
         start = NOW + offset - 600
         if agent == "claude":
-            sid = f"d3m0{i:04d}-0000-4000-8000-{i:012d}"
+            sid = f"de300000-{i:04d}-4000-8000-{i:012d}"  # a valid UUID, like a real session id
             folder = root / "claude" / "projects" / str(cwd).replace("/", "-")
             folder.mkdir(parents=True, exist_ok=True)
             lines = []
@@ -81,7 +81,7 @@ def main():
             lines.append({"type": "custom-title", "customTitle": title, "sessionId": sid})
             (folder / f"{sid}.jsonl").write_text("".join(json.dumps(l, ensure_ascii=False) + "\n" for l in lines))
         else:
-            sid = f"01a1d3m0-{i:04d}-7000-8000-{i:012d}"
+            sid = f"01a1de30-{i:04d}-7000-8000-{i:012d}"
             folder = root / "codex" / "sessions" / "2026" / "11" / "19"
             folder.mkdir(parents=True, exist_ok=True)
             lines = [{"timestamp": iso(start), "type": "session_meta", "payload": {"id": sid, "cwd": str(cwd), "timestamp": iso(start), "source": "cli"}}]
