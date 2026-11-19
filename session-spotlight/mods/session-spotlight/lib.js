@@ -3,7 +3,7 @@
 
 import { t, dateParams, reason } from "./i18n.js";
 
-export { t, setLanguage, language, chooseLanguage, reason } from "./i18n.js";
+export { t, setLanguage, language, reason } from "./i18n.js";
 
 export const AGENT_LABEL = { claude: "Claude Code", codex: "Codex" };
 
@@ -279,11 +279,11 @@ export function listItems(results, { query, sort }) {
     const running = results.filter((r) => r.running);
     const rest = results.filter((r) => !r.running);
     if (running.length) {
-      items.push({ kind: "head", key: "h-running", label: t("section_open"), count: running.length });
+      items.push({ kind: "head", key: "h-running", labelKey: "section_open", count: running.length });
       running.forEach((r) => items.push({ kind: "row", key: r.key, r }));
     }
     if (rest.length) {
-      items.push({ kind: "head", key: "h-recent", label: t("section_recent"), count: rest.length });
+      items.push({ kind: "head", key: "h-recent", labelKey: "section_recent", count: rest.length });
       rest.forEach((r) => items.push({ kind: "row", key: r.key, r }));
     }
     return items;

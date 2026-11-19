@@ -11,7 +11,7 @@ import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, v_virtual_list, VirtualListScrollHandle, ScrollHandle, Popup } from "gpui-base";
 import {
   exec, run, notify, theme, props, closeOverlay, settings, spaces, panes, agents, terminals,
-  knownAgents, appHome, home, readTextFile, checking, nextCommand,
+  knownAgents, appHome, checking, nextCommand,
 } from "herdr";
 import * as L from "./lib.js";
 
@@ -77,7 +77,6 @@ export default class SessionSpotlight extends View {
       { keystroke: "shift-tab", action: PREV_FILTER, context: CONTEXT },
     ]);
     if (checking()) return;
-    this.loadLanguage(cx);
     this.refreshLive(cx, true);
     this.runIndex(cx);
     // Herdr's terminals change while the dialog is open (an agent starts or ends).
@@ -94,27 +93,13 @@ export default class SessionSpotlight extends View {
 
   // -- language ---------------------------------------------------------------
 
-  // ~/.config/herdr-session-spotlight/config.json: "language": "en" (default) | "ko" | "auto".
-  loadLanguage(cx) {
-    cx.spawn(async (cx) => {
-      let configured = "en";
-      try {
-        const text = await readTextFile(`${home()}/.config/herdr-session-spotlight/config.json`);
-        if (text) configured = JSON.parse(text).language ?? "en";
-      } catch {}
-      let locale = "";
-      if (String(configured).toLowerCase() === "auto") {
-        try {
-          locale = (await exec("defaults", ["read", "-g", "AppleLocale"], { timeout: 3000 })).stdout.trim();
-        } catch {}
-      }
-      const lang = L.chooseLanguage(configured, locale);
-      if (lang !== L.language()) {
-        L.setLanguage(lang);
-        cx.notify();
-      }
-      cache.language = lang;
-    });
+  // The engine reads the config ("language": "en" | "ko" | "auto") and answers with "en" or "ko"
+  // on every search, so the dialog and the engine always agree on which config file counts.
+  applyLanguage(lang) {
+    if (!lang || lang === L.language()) return false;
+    L.setLanguage(lang);
+    cache.language = L.language();
+    return true;
   }
 
   // -- engine ---------------------------------------------------------------
@@ -127,8 +112,8 @@ export default class SessionSpotlight extends View {
       data = JSON.parse(r.stdout);
     } catch {}
     if (!data) {
-      const why = (r.stderr || r.stdout || `exit ${r.code}`).trim().split("\n").filter(Boolean).pop();
-      throw new Error(why || L.t("engine_no_answer"));
+      const why = (r.stderr || r.stdout || "").trim().split("\n").filter(Boolean).pop();
+      throw new Error(why || (r.code ? L.t("engine_exit", { code: r.code }) : L.t("engine_no_answer")));
     }
     return data;
   }
@@ -202,6 +187,7 @@ export default class SessionSpotlight extends View {
         return cx.notify();
       }
       this.error = null;
+      this.applyLanguage(data.language);
       this.apply(data, queryAtStart !== this.lastQuery, cx);
       this.lastQuery = queryAtStart;
       if (!this.query && JSON.stringify(this.filters) === JSON.stringify(L.DEFAULT_FILTERS)) {
@@ -501,7 +487,7 @@ export default class SessionSpotlight extends View {
   row(it, selected, t, nowMs) {
     if (it.kind === "head") {
       return h_flex().h(L.HEAD_H).px(18).pt(8).gap(6).items_center().text_size(11).font_semibold().text_color(t.dim)
-        .child(it.label).child(div().font_medium().text_color(t.dim).child(String(it.count)));
+        .child(L.t(it.labelKey)).child(div().font_medium().text_color(t.dim).child(String(it.count)));
     }
     const r = it.r;
     const snippet = L.showsSnippet(r);
@@ -517,7 +503,7 @@ export default class SessionSpotlight extends View {
             .child(div().flex_1().min_w(0).text_size(13.5).text_color(t.foreground).child(
               r.title_segments?.some(([, on]) => on)
                 ? this.segs(r.title_segments, t.foreground, t.accent, { weight: selected ? 600 : 500 })
-                : div().truncate().font_weight(selected ? 600 : 500).child(r.title),
+                : div().truncate().font_weight(selected ? 600 : 500).child(r.title || L.t("untitled")),
             ))
             .when(Boolean(r.running), (el) => el.child(this.statusPill(r.running.status, t)))
             .when(!r.running && r.archived, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(L.t("archived")))),
@@ -646,7 +632,7 @@ export default class SessionSpotlight extends View {
           .child(this.agentIcon(r, 26, t))
           .child(
             v_flex().flex_1().min_w(0).gap(4)
-              .child(div().text_size(15.5).line_height("22px").max_h(44).overflow_hidden().font_semibold().text_color(t.foreground).child(r.title))
+              .child(div().text_size(15.5).line_height("22px").max_h(44).overflow_hidden().font_semibold().text_color(t.foreground).child(r.title || L.t("untitled")))
               .child(h_flex().gap(8).items_center().text_size(12).text_color(t.dim)
                 .when(Boolean(r.running), (el) => el.child(this.statusPill(r.running.status, t)))
                 .when(!r.running, (el) => el.child(div().child(L.t("ended"))))

@@ -1,11 +1,14 @@
 // Session Spotlight: UI strings. English is the base; every key must exist in "en".
 // A missing key in another language falls back to English. {name} is filled from params.
-// Choose the language in ~/.config/herdr-session-spotlight/config.json: "language": "en" | "ko" | "auto".
+// The language comes from ~/.config/herdr-session-spotlight/config.json ("language": "en" | "ko" | "auto"),
+// read and resolved by the engine, which reports "en" or "ko" with every search.
 
 export const STRINGS = {
   en: {
     placeholder: "Search sessions, conversations, projects…",
     engine_no_answer: "The search engine didn't answer",
+    engine_exit: "The search engine stopped (exit {code})",
+    untitled: "Untitled",
     resolve_failed: "Couldn't check running sessions: {error}",
     index_failed: "Indexing failed: {error}",
     search_failed: "Search failed",
@@ -112,6 +115,8 @@ export const STRINGS = {
   ko: {
     placeholder: "세션 제목, 대화 내용, 프로젝트로 검색…",
     engine_no_answer: "검색 엔진이 응답하지 않았습니다",
+    engine_exit: "검색 엔진이 종료되었습니다 (exit {code})",
+    untitled: "제목 없음",
     resolve_failed: "실행 중 세션 확인 실패: {error}",
     index_failed: "인덱싱 실패: {error}",
     search_failed: "검색 실패",
@@ -189,9 +194,9 @@ export const STRINGS = {
     project_all: "모든 프로젝트",
     when_today: "오늘 {time}",
     when_yesterday: "어제 {time}",
-    when_this_year: "{monthNum}월 {day}일 {time}",
-    when_other_year: "{year}. {monthNum}. {day}.",
-    when_full: "{year}. {monthNum}. {day}. {time}",
+    when_this_year: "{month}월 {day}일 {time}",
+    when_other_year: "{year}. {month}. {day}.",
+    when_full: "{year}. {month}. {day}. {time}",
     rel_now: "방금",
     rel_min: "{n}분 전",
     rel_hour: "{n}시간 전",
@@ -231,14 +236,6 @@ export function language() {
   return current;
 }
 
-/** Picks the language from a config value and, for "auto", the system locale (e.g. "ko_KR"). */
-export function chooseLanguage(configured, systemLocale) {
-  const want = String(configured || "en").toLowerCase();
-  if (want !== "auto") return STRINGS[want] ? want : "en";
-  const sys = String(systemLocale || "").toLowerCase().slice(0, 2);
-  return STRINGS[sys] ? sys : "en";
-}
-
 export function t(key, params = {}) {
   const table = STRINGS[current] ?? STRINGS.en;
   let s = table[key] ?? STRINGS.en[key] ?? key;
@@ -246,16 +243,23 @@ export function t(key, params = {}) {
   return s;
 }
 
-/** Date pieces every language's patterns can use. */
+// How each language writes a month in its date patterns.
+const MONTH = { en: (m) => MONTHS[m], ko: (m) => m + 1 };
+
+/** Date pieces for the date patterns: {year} {month} {day} {time}, the month as the current language writes it. */
 export function dateParams(d) {
   const pad = (n) => String(n).padStart(2, "0");
   return {
     year: d.getFullYear(),
-    month: MONTHS[d.getMonth()],
-    monthNum: d.getMonth() + 1,
+    month: (MONTH[current] ?? MONTH.en)(d.getMonth()),
     day: d.getDate(),
     time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
   };
+}
+
+/** The {placeholders} a string uses (tests check every language uses the same ones). */
+export function placeholders(text) {
+  return [...String(text).matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 }
 
 /** The engine's `why_not_code` / error code in the current language, or its own text. */

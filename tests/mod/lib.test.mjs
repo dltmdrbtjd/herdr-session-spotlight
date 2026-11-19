@@ -223,7 +223,8 @@ test("status labels follow Herdr's agent status; idle doesn't read as running", 
   assert.equal(L.statusLabel("done").label, "Done");
   for (const s of ["idle", "", null, undefined]) assert.deepEqual(L.statusLabel(s), { label: "Idle", tone: "idle" });
   const items = L.listItems([{ key: "a", running: { address: "t1" } }], { query: "", sort: "auto" });
-  assert.equal(items[0].label, "Open sessions");
+  assert.equal(items[0].labelKey, "section_open");
+  assert.equal(L.t(items[0].labelKey), "Open sessions");
 });
 
 test("Korean is one setting away, and missing keys fall back to English", async () => {
@@ -242,11 +243,11 @@ test("Korean is one setting away, and missing keys fall back to English", async 
   } finally {
     L.setLanguage("en");
   }
-  // Every Korean key exists in English (the base), and the reverse.
+  // Every Korean key exists in English (the base), and the reverse, with the same {placeholders}.
   assert.deepEqual(Object.keys(I.STRINGS.ko).sort(), Object.keys(I.STRINGS.en).sort());
+  for (const key of Object.keys(I.STRINGS.en)) {
+    assert.deepEqual(I.placeholders(I.STRINGS.ko[key]), I.placeholders(I.STRINGS.en[key]), key);
+  }
   assert.equal(L.setLanguage("fr"), "en");
-  assert.equal(L.chooseLanguage("auto", "ko_KR"), "ko");
-  assert.equal(L.chooseLanguage("auto", "de_DE"), "en");
-  assert.equal(L.chooseLanguage(undefined, "ko_KR"), "en");
-  assert.equal(L.chooseLanguage("KO", ""), "ko");
+  assert.equal(L.t("untitled"), "Untitled");
 });
