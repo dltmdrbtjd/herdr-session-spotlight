@@ -17,35 +17,36 @@ NOW = time.time()
 H, D = 3600, 86400
 
 SESSIONS = [
-    ("claude", "acme-web", "마이페이지 프로필 수정", -0.4 * H, [
-        ("user", "마이페이지에서 닉네임과 프로필 이미지를 수정하는 API를 붙여줘. 입력값 검증도 필요해."),
-        ("assistant", "프로필 수정 API와 입력 유효성 검증을 구현했습니다. 닉네임은 2–20자, 이미지는 5MB 이하만 허용합니다."),
-        ("user", "저장 버튼은 변경 사항이 있을 때만 활성화해줘"),
-        ("assistant", "폼 상태를 비교해 변경이 있을 때만 저장 버튼이 활성화되도록 했습니다."),
+    ("claude", "acme-web", "Edit profile page", -0.4 * H, [
+        ("user", "Add an API for editing the nickname and avatar on the profile page, with input validation."),
+        ("assistant", "Added the profile update API with validation: nicknames are 2–20 characters and avatars at most 5 MB."),
+        ("user", "Only enable the Save button when something changed"),
+        ("assistant", "The form now compares its state and enables Save only when there are changes."),
     ]),
-    ("claude", "acme-web", "결제 화면 리팩터링", -5 * H, [
-        ("user", "결제 화면 컴포넌트가 너무 커. 단계별로 나눠줘."),
-        ("assistant", "주문 요약, 배송지, 결제 수단 세 단계로 분리하고 공통 상태는 useCheckout 훅으로 옮겼습니다."),
+    ("claude", "acme-web", "Refactor the checkout page", -5 * H, [
+        ("user", "The checkout component is too big. Split it into steps."),
+        ("assistant", "Split it into order summary, shipping and payment steps, with shared state in a useCheckout hook."),
     ]),
     ("codex", "acme-api", "Review payment webhook retries", -1.2 * D, [
         ("user", "Review the payment webhook handler for retry safety."),
         ("assistant", "Two issues: the handler isn't idempotent on duplicate events, and failures return 200 so the provider never retries."),
     ]),
-    ("claude", "acme-api", "로그인 세션 만료 버그", -2 * D, [
-        ("user", "로그인하고 30분 지나면 갑자기 로그아웃돼. 원인 찾아줘."),
-        ("assistant", "리프레시 토큰 갱신 요청이 동시에 두 번 나가며 두 번째가 실패하는 경쟁 상태였습니다. 갱신을 하나로 합쳐 고쳤습니다."),
+    ("claude", "acme-api", "Fix session expiry after login", -2 * D, [
+        ("user", "Users get logged out about 30 minutes after signing in. Find out why."),
+        ("assistant", "Two refresh-token requests raced and the second one failed. Refreshes are now coalesced into one."),
     ]),
     ("codex", "acme-mobile", "Add push notification settings", -3 * D, [
         ("user", "Add a settings screen for push notifications with per-topic toggles."),
         ("assistant", "Added NotificationSettings with toggles for orders, promotions and chat; preferences sync to the profile API."),
     ]),
-    ("claude", "acme-mobile", "앱 시작 속도 개선", -6 * D, [
-        ("user", "앱 첫 화면 뜨는 데 3초나 걸려. 줄일 방법?"),
-        ("assistant", "폰트 로딩과 원격 설정 요청이 첫 화면을 막고 있었습니다. 둘 다 비동기로 돌려 1.1초로 줄였습니다."),
+    ("claude", "acme-mobile", "Speed up app launch", -6 * D, [
+        ("user", "The first screen takes 3 seconds to appear. How can we cut that?"),
+        ("assistant", "Font loading and the remote config request were blocking the first screen. Both run asynchronously now: 1.1 s."),
     ]),
+    # Korean sessions: substring search works across particles ("프로필" finds "프로필을").
     ("claude", "acme-docs", "온보딩 문서 정리", -12 * D, [
-        ("user", "신규 입사자용 개발 환경 세팅 문서를 정리해줘"),
-        ("assistant", "설치, 저장소 클론, 환경 변수, 로컬 실행 순서로 다시 썼고 자주 막히는 부분을 FAQ로 모았습니다."),
+        ("user", "신규 입사자용 개발 환경 세팅 문서를 정리해줘. 프로필 설정 방법도 넣어줘"),
+        ("assistant", "설치, 저장소 클론, 환경 변수, 로컬 실행 순서로 다시 썼고 프로필을 설정하는 방법과 FAQ를 추가했습니다."),
     ]),
     ("codex", "acme-web", "Fix flaky checkout e2e test", -20 * D, [
         ("user", "The checkout e2e test fails one run in five. Find out why."),
